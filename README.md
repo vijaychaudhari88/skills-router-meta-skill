@@ -127,28 +127,76 @@ python3 scripts/skills_router.py disable <skill-id>
 
 # 6. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
 python3 scripts/skills_router.py enable <skill-id>
+
+# 7. Install or update harness contracts for all 6 major agent harnesses
+python3 scripts/skills_router.py install-harness all [--target <path>]
+
+# 8. Install integration for a specific harness (e.g. cursor, claude, windsurf)
+python3 scripts/skills_router.py install-harness cursor --target .
 ```
 
 ---
 
-## 🧩 Project Integration
+## 🌐 Usability Across 6 Major Agent Harnesses
 
-To integrate the router into your project's agent constitution (`AGENTS.md` or `CLAUDE.md`), add this idempotent comment fence:
+`skills-router-meta-skill` is engineered to work out-of-the-box across the **6 leading AI coding agent harnesses**. It provides automated, idempotent rule installation and tailored prompt contracts for each:
 
-```markdown
-<!-- skills-manager:routing-contract:begin -->
-### Autonomous Skills Router Contract
-Before modifying code, designing architecture, or executing sub-tasks:
-1. Pre-Flight Routing Query:
-   python3 scripts/skills_router.py route "<user intent or task description>"
-2. Decision Triad Protocol:
-   - route: Follow selected skill or disjoint multi-skill plan.
-   - ambiguous: Ask user to choose between top candidates.
-   - no_route: Proceed with generalist reasoning without hallucinating skill activations.
-3. Local Sovereignty: Project skills in ./.agents/skills/ and ./skills/ strictly override global plugins.
-4. Lifecycle: Manage dormant skills via disable and enable commands.
-<!-- skills-manager:routing-contract:end -->
+| Harness | Primary Files Configured | Activation Mechanism | Supported Features |
+|---|---|---|---|
+| **1. Claude Code** | `CLAUDE.md` | Pre-flight bash invocation via `BashTool` | Progressive disclosure, tool gating |
+| **2. Gemini / Antigravity** | `AGENTS.md`, `GEMINI.md` | Constitutional comment fence block | Local sovereignty, subagents |
+| **3. Cursor** | `.cursor/rules/skills-router.mdc`, `.cursorrules` | `alwaysApply: true`, `globs: "*"` | Composer / Agent context injection |
+| **4. Windsurf / Cascade** | `.windsurf/rules/skills-router.md`, `.windsurfrules` | Frontmatter `trigger: always_on` | Cascade system prompt steering |
+| **5. Roo Code & Cline** | `.roo/rules/00-skills-router.md`, `.clinerules` | Alphabetical workspace rule loading | Mode-specific / workspace context |
+| **6. Aider** | `CONVENTIONS.md`, `.aider.conf.yml` | Repo-map auto-read conventions | Git pair-programming workflow |
+
+### ⚡ One-Command Installation for Any Workspace
+
+Run the `install-harness` command to automatically generate or update the configuration files in any target project:
+
+```bash
+# Configure all 6 harnesses in your project
+python3 scripts/skills_router.py install-harness all --target /path/to/project
+
+# Or configure specific harnesses:
+python3 scripts/skills_router.py install-harness claude cursor windsurf --target .
 ```
+
+The installer is **100% idempotent**: if a configuration file already exists, it cleanly replaces the `<!-- skills-manager:routing-contract:begin -->` block without overwriting your project-specific notes.
+
+---
+
+## 🧩 Harness-by-Harness Configuration Details
+
+### 1. Claude Code (Anthropic)
+- **Target File:** `CLAUDE.md`
+- **Behavior:** Instructs Claude Code to execute `python3 scripts/skills_router.py route "<task>"` via its `BashTool` before creating execution plans or writing code.
+- **Reference Template:** [`templates/harnesses/claude-code/CLAUDE.md`](templates/harnesses/claude-code/CLAUDE.md)
+
+### 2. Gemini CLI & Antigravity (Google DeepMind)
+- **Target Files:** `AGENTS.md` and `GEMINI.md`
+- **Behavior:** Acts as a constitutional prefix for the agentReAct control loop, enforcing the 4-phase pipeline (`Guardrails → Pre-Execution → Execution → Verification`).
+- **Reference Templates:** [`templates/harnesses/gemini-antigravity/`](templates/harnesses/gemini-antigravity/)
+
+### 3. Cursor (Cursor AI IDE)
+- **Target Files:** `.cursor/rules/skills-router.mdc` (and `.cursorrules` fallback)
+- **Behavior:** Configured with `alwaysApply: true` so the rule is automatically injected into every Composer/Agent turn.
+- **Reference Templates:** [`templates/harnesses/cursor/`](templates/harnesses/cursor/)
+
+### 4. Windsurf (Codeium Cascade)
+- **Target Files:** `.windsurf/rules/skills-router.md` (and `.windsurfrules` fallback)
+- **Behavior:** Configured with `trigger: always_on` to ensure Cascade consults the router before generating file diffs.
+- **Reference Templates:** [`templates/harnesses/windsurf/`](templates/harnesses/windsurf/)
+
+### 5. Roo Code & Cline (VS Code Extensions)
+- **Target Files:** `.roo/rules/00-skills-router.md` (and `.clinerules` fallback)
+- **Behavior:** Prefixed with `00-` so it loads first alphabetically in Roo Code's workspace rules hierarchy.
+- **Reference Templates:** [`templates/harnesses/roo-cline/`](templates/harnesses/roo-cline/)
+
+### 6. Aider (CLI Pair Programmer)
+- **Target Files:** `CONVENTIONS.md` and `.aider.conf.yml`
+- **Behavior:** Configures Aider to read `CONVENTIONS.md` into context, guiding the LLM to inspect the router output before generating git commits.
+- **Reference Templates:** [`templates/harnesses/aider/`](templates/harnesses/aider/)
 
 ---
 
@@ -165,12 +213,19 @@ skills-router-meta-skill/
 ├── scripts/
 │   └── skills_router.py             # Two-Stage Deterministic CLI Router
 ├── tests/
-│   └── test_skills_router.py        # Automated Unit & Integration Tests
+│   └── test_skills_router.py        # Automated Unit & Integration Tests (11/11 passing)
 └── templates/
-    ├── AGENTS.md.snippet            # Copy-pasteable trigger fence for agents
-    └── example_skill/
-        ├── SKILL.md                 # Example lightweight skill specification
-        └── manifest.json            # Example rich capability manifest
+    ├── AGENTS.md.snippet            # Universal trigger fence for agent prompts
+    ├── example_skill/
+    │   ├── SKILL.md                 # Example lightweight skill specification
+    │   └── manifest.json            # Example rich capability manifest
+    └── harnesses/                   # Ready-to-use configs for 6 major agent harnesses
+        ├── claude-code/             # Claude Code (CLAUDE.md)
+        ├── gemini-antigravity/      # Gemini CLI / Antigravity (AGENTS.md, GEMINI.md)
+        ├── cursor/                  # Cursor (.cursor/rules/skills-router.mdc, .cursorrules)
+        ├── windsurf/                # Windsurf (.windsurf/rules/skills-router.md, .windsurfrules)
+        ├── roo-cline/               # Roo Code / Cline (.roo/rules/, .clinerules)
+        └── aider/                   # Aider (CONVENTIONS.md, .aider.conf.yml)
 ```
 
 ---

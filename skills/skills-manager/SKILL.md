@@ -268,6 +268,34 @@ python3 scripts/skills_router.py disable <skill-id>
 
 # 7. Enable a dormant skill
 python3 scripts/skills_router.py enable <skill-id>
+
+# 8. Install or update harness contracts for all 6 major agent harnesses
+python3 scripts/skills_router.py install-harness all [--target <dir>]
+
+# 9. Install integration for a specific harness (e.g., cursor, claude, windsurf)
+python3 scripts/skills_router.py install-harness cursor --target .
+```
+
+---
+
+## 11. Cross-Harness Interoperability (6 Major Harnesses)
+
+`skills-manager` is designed as a universal, harness-agnostic meta-skill. It provides native configuration adapters for the 6 leading AI coding agent harnesses:
+
+| Harness | Target Configuration Files | Activation & Trigger Protocol |
+|---|---|---|
+| **1. Claude Code** | `CLAUDE.md` | Pre-flight bash invocation via `BashTool` |
+| **2. Gemini / Antigravity** | `AGENTS.md`, `GEMINI.md` | Constitutional comment fence + turn start reconnaissance |
+| **3. Cursor** | `.cursor/rules/skills-router.mdc`, `.cursorrules` | Frontmatter `alwaysApply: true`, `globs: "*"` |
+| **4. Windsurf / Cascade** | `.windsurf/rules/skills-router.md`, `.windsurfrules` | Frontmatter `trigger: always_on` |
+| **5. Roo Code / Cline** | `.roo/rules/00-skills-router.md`, `.clinerules` | Alphabetical rule loading into agent workspace context |
+| **6. Aider** | `CONVENTIONS.md`, `.aider.conf.yml` | Repo map injection and auto-read conventions |
+
+### Automated Multi-Harness Installation
+Run one command to configure any project workspace for all 6 harnesses:
+```bash
+python3 scripts/skills_router.py install-harness all --target .
+```
 ```
 
 ### POSIX Fallback Shell Extractor

@@ -1,0 +1,6 @@
+# Windsurf Rules Fallback
+
+<!-- skills-manager:routing-contract:begin -->
+Before coding: run `python3 scripts/skills_router.py route "<task>"`.
+Follow Decision Triad: route, ambiguous, no_route.
+<!-- skills-manager:routing-contract:end -->

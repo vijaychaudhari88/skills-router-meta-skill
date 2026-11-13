@@ -1,0 +1,6 @@
+# Cursor Rules Fallback
+
+<!-- skills-manager:routing-contract:begin -->
+Before modifying code: query `python3 scripts/skills_router.py route "<task>"`.
+Follow the 4-phase execution pipeline: Guardrails -> Pre-Execution -> Execution -> Verification.
+<!-- skills-manager:routing-contract:end -->

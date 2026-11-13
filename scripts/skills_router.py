@@ -959,6 +959,96 @@ def cmd_benchmark(project_root: Path) -> int:
     return 0 if passed == len(test_cases) else 1
 
 # ---------------------------------------------------------------------------
+# Harness Installation Engine
+# ---------------------------------------------------------------------------
+HARNESS_MAP = {
+    "claude": [
+        ("CLAUDE.md", "claude-code/CLAUDE.md")
+    ],
+    "gemini": [
+        ("AGENTS.md", "gemini-antigravity/AGENTS.md"),
+        ("GEMINI.md", "gemini-antigravity/GEMINI.md")
+    ],
+    "cursor": [
+        (".cursor/rules/skills-router.mdc", "cursor/.cursor/rules/skills-router.mdc"),
+        (".cursorrules", "cursor/.cursorrules")
+    ],
+    "windsurf": [
+        (".windsurf/rules/skills-router.md", "windsurf/.windsurf/rules/skills-router.md"),
+        (".windsurfrules", "windsurf/.windsurfrules")
+    ],
+    "roo": [
+        (".roo/rules/00-skills-router.md", "roo-cline/.roo/rules/00-skills-router.md"),
+        (".clinerules", "roo-cline/.clinerules")
+    ],
+    "aider": [
+        ("CONVENTIONS.md", "aider/CONVENTIONS.md"),
+        (".aider.conf.yml", "aider/.aider.conf.yml")
+    ]
+}
+
+def inject_or_create(target_path: Path, template_text: str) -> str:
+    begin_marker = "<!-- skills-manager:routing-contract:begin -->"
+    end_marker = "<!-- skills-manager:routing-contract:end -->"
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if not target_path.exists():
+        target_path.write_text(template_text, encoding="utf-8")
+        return f"created {target_path.name}"
+
+    existing = target_path.read_text(encoding="utf-8")
+    if begin_marker in existing and end_marker in existing:
+        b_idx = template_text.find(begin_marker)
+        e_idx = template_text.find(end_marker) + len(end_marker)
+        new_block = template_text[b_idx:e_idx]
+
+        eb_idx = existing.find(begin_marker)
+        ee_idx = existing.find(end_marker) + len(end_marker)
+        updated = existing[:eb_idx] + new_block + existing[ee_idx:]
+        target_path.write_text(updated, encoding="utf-8")
+        return f"updated {target_path.name} (idempotent contract replaced)"
+    else:
+        b_idx = template_text.find(begin_marker)
+        e_idx = template_text.find(end_marker) + len(end_marker)
+        new_block = template_text[b_idx:e_idx] if begin_marker in template_text else template_text
+        updated = existing.rstrip() + "\n\n" + new_block + "\n"
+        target_path.write_text(updated, encoding="utf-8")
+        return f"updated {target_path.name} (contract appended)"
+
+def cmd_install_harness(harness_names: list[str], target_dir: Path) -> int:
+    """Install or update harness integration contracts for AI coding harnesses."""
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent
+    tmpl_base = repo_root / "templates" / "harnesses"
+
+    if not harness_names or "all" in [h.lower() for h in harness_names]:
+        selected = list(HARNESS_MAP.keys())
+    else:
+        selected = [h.lower() for h in harness_names if h.lower() in HARNESS_MAP]
+
+    if not selected:
+        print(f"✘ Error: Unknown harness(es) '{harness_names}'. Supported: {list(HARNESS_MAP.keys()) + ['all']}", file=sys.stderr)
+        return 1
+
+    print(f"Installing harness integration(s) for: {', '.join(selected)} into '{target_dir}'...")
+    installed_count = 0
+    for h in selected:
+        configs = HARNESS_MAP[h]
+        for rel_dest, rel_src in configs:
+            target_file = target_dir / rel_dest
+            src_file = tmpl_base / rel_src
+            if src_file.exists():
+                tmpl_text = src_file.read_text(encoding="utf-8")
+            else:
+                tmpl_text = f"# {rel_dest}\n\n<!-- skills-manager:routing-contract:begin -->\n### Skills Router Contract\npython3 scripts/skills_router.py route \"<task>\"\n<!-- skills-manager:routing-contract:end -->\n"
+            msg = inject_or_create(target_file, tmpl_text)
+            print(f"  ✔ [{h:8}] {msg}")
+            installed_count += 1
+
+    print(f"✔ Successfully configured {installed_count} harness files across {len(selected)} agent harness(es).")
+    return 0
+
+# ---------------------------------------------------------------------------
 # Main CLI Dispatcher
 # ---------------------------------------------------------------------------
 def main():
@@ -994,6 +1084,11 @@ def main():
     ena_p.add_argument("skill_id", help="Skill identifier to enable")
     ena_p.add_argument("--root", default=".", help="Project root directory")
 
+    # install-harness
+    inst_p = subparsers.add_parser("install-harness", help="Install router integration for major AI agent harnesses")
+    inst_p.add_argument("harness", nargs="*", default=["all"], help="Harnesses to configure: claude, gemini, cursor, windsurf, roo, aider, or all")
+    inst_p.add_argument("--target", default=".", help="Target project directory")
+
     args = parser.parse_args()
     root = Path(args.root if hasattr(args, "root") else ".").resolve()
 
@@ -1007,6 +1102,9 @@ def main():
         sys.exit(cmd_disable(args.skill_id, root, yes=args.yes))
     elif args.command == "enable":
         sys.exit(cmd_enable(args.skill_id, root))
+    elif args.command == "install-harness":
+        target = Path(args.target).resolve()
+        sys.exit(cmd_install_harness(args.harness, target))
     elif args.command == "list":
         reg = discover_all_skills(root)
         for name, s in sorted(reg.items()):

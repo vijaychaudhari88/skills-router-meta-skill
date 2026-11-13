@@ -166,5 +166,44 @@ class TestDeterministicRouting(unittest.TestCase):
         self.assertIn("zod-validation-expert", res["skills"])
 
 
+class TestHarnessInstallation(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.test_dir = Path(tempfile.mkdtemp(prefix="harness_test_"))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_install_all_harnesses(self):
+        from skills_router import cmd_install_harness
+        exit_code = cmd_install_harness(["all"], self.test_dir)
+        self.assertEqual(exit_code, 0)
+        self.assertTrue((self.test_dir / "CLAUDE.md").exists())
+        self.assertTrue((self.test_dir / "AGENTS.md").exists())
+        self.assertTrue((self.test_dir / ".cursor" / "rules" / "skills-router.mdc").exists())
+        self.assertTrue((self.test_dir / ".windsurf" / "rules" / "skills-router.md").exists())
+        self.assertTrue((self.test_dir / ".roo" / "rules" / "00-skills-router.md").exists())
+        self.assertTrue((self.test_dir / "CONVENTIONS.md").exists())
+
+    def test_idempotent_injection(self):
+        from skills_router import inject_or_create
+        claude_file = self.test_dir / "CLAUDE.md"
+        claude_file.write_text("# Initial Content\n\nSome custom notes.", encoding="utf-8")
+        
+        # First injection appends
+        msg1 = inject_or_create(claude_file, "<!-- skills-manager:routing-contract:begin -->\nVersion 1\n<!-- skills-manager:routing-contract:end -->")
+        self.assertIn("appended", msg1)
+        self.assertIn("Version 1", claude_file.read_text(encoding="utf-8"))
+        
+        # Second injection replaces idempotently
+        msg2 = inject_or_create(claude_file, "<!-- skills-manager:routing-contract:begin -->\nVersion 2\n<!-- skills-manager:routing-contract:end -->")
+        self.assertIn("replaced", msg2)
+        content = claude_file.read_text(encoding="utf-8")
+        self.assertIn("Version 2", content)
+        self.assertNotIn("Version 1", content)
+        self.assertIn("Some custom notes.", content)
+
+
 if __name__ == "__main__":
     unittest.main()

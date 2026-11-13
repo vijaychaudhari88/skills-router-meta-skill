@@ -1,0 +1,6 @@
+# Cline Legacy Rules Fallback
+
+<!-- skills-manager:routing-contract:begin -->
+Before modifying code: run `python3 scripts/skills_router.py route "<task>"`.
+Follow Decision Triad: route, ambiguous, no_route.
+<!-- skills-manager:routing-contract:end -->
