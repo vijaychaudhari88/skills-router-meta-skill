@@ -362,6 +362,7 @@ def discover_all_skills(project_root: Path) -> dict[str, SkillRecord]:
         (95, "Project", project_root / "skills"),
         (90, "Project", project_root / ".antigravity" / "skills"),
         (50, "Global", home / ".gemini" / "config" / "plugins"),
+        (45, "Global", home / ".config" / "opencode" / "skills"),
         (40, "Global", home / ".claude" / "skills"),
     ]
 
@@ -688,6 +689,24 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             "components": {k: round(v, 3) for k, v in c.components.items()}
         }
 
+    def generate_skills_summary(selected_candidates: list[ScoredCandidate]) -> list[dict]:
+        summary = []
+        for c in selected_candidates:
+            reason = c.matched_object or c.skill.category
+            if c.evidence:
+                reason = c.evidence[0]
+            summary.append({
+                "skill": c.skill.name,
+                "reason": reason
+            })
+        return summary
+
+    def format_skills_applied_markdown(summary: list[dict]) -> str:
+        lines = ["> 🛠️ **Skills Applied:**"]
+        for s in summary:
+            lines.append(f"> - `{s['skill']}`: {s['reason']}")
+        return "\n".join(lines)
+
     # -----------------------------------------------------------------------
     # Multi-Skill Plan Assembly
     # -----------------------------------------------------------------------
@@ -721,11 +740,14 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     # Check for multi-skill plan first if task explicitly connects multiple facets
     if len(multi_plan) >= 2 and has_conjunction:
         skill_names = [m.skill.name for m in multi_plan]
+        summary = generate_skills_summary(multi_plan)
         return {
             "decision": "route",
             "status": "multi_skill_plan",
             "skill": skill_names[0],
             "skills": skill_names,
+            "skills_summary": summary,
+            "skills_applied_text": format_skills_applied_markdown(summary),
             "command": multi_plan[0].skill.commands[0] if multi_plan[0].skill.commands else None,
             "confidence": round(winner.confidence, 3),
             "evidence": "; ".join(winner.evidence),
@@ -738,11 +760,14 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     if winner.confidence >= CONFIG["route_floor"]:
         if not second or (winner.confidence - second.confidence) > CONFIG["ambiguity_gap"]:
             cmd = winner.skill.commands[0] if winner.skill.commands else None
+            summary = generate_skills_summary([winner])
             return {
                 "decision": "route",
                 "status": "matched",
                 "skill": winner.skill.name,
                 "skills": [winner.skill.name],
+                "skills_summary": summary,
+                "skills_applied_text": format_skills_applied_markdown(summary),
                 "command": cmd,
                 "confidence": round(winner.confidence, 3),
                 "evidence": "; ".join(winner.evidence),
@@ -760,6 +785,8 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             "status": "ambiguous",
             "skill": None,
             "skills": alt_names,
+            "skills_summary": [],
+            "skills_applied_text": "",
             "command": None,
             "confidence": round(winner.confidence, 3),
             "evidence": f"near tie between {winner.skill.name} ({round(winner.confidence, 2)}) and {second.skill.name} ({round(second.confidence, 2)})",
@@ -775,6 +802,8 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         "status": "no_match",
         "skill": None,
         "skills": [],
+        "skills_summary": [],
+        "skills_applied_text": "",
         "command": None,
         "confidence": round(winner.confidence, 3),
         "evidence": f"best score {round(winner.confidence, 2)} fell below floor {CONFIG['no_route_floor']}",

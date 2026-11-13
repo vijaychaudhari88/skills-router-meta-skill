@@ -241,6 +241,17 @@ flowchart LR
 - **Phase 3 (Execution):** Strictly Red-Green-Refactor implementation (`test-driven-development`, `zod-validation-expert`, `database-design`).
 - **Phase 4 (Defensive Verification):** Proof of correctness before assertions (`verification-before-completion`, `chrome-devtools`, `a11y-debugging`).
 
+### User-Facing Skill Reporting Contract
+Whenever any skill(s) are engaged or utilized during a turn, the agent MUST explicitly include a concise, high-visibility summary in its response explaining in a few words **what skill(s) were used and why**:
+
+```markdown
+> 🛠️ **Skills Applied:**
+> - `<skill-1>`: <why it was used in 5-10 words>
+> - `<skill-2>`: <why it was used in 5-10 words>
+```
+
+*Rule of Brevity:* Avoid long paragraphs. State the skill identifier and its concrete purpose concisely.
+
 ---
 
 ## 10. CLI Reference & Verification Commands
