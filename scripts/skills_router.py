@@ -1013,8 +1013,45 @@ HARNESS_MAP = {
     "aider": [
         ("CONVENTIONS.md", "aider/CONVENTIONS.md"),
         (".aider.conf.yml", "aider/.aider.conf.yml")
-    ]
+    ],
+    "antigem": []
 }
+
+def install_antigem_commands(target_dir: Path) -> str:
+    xml_path = Path("/data/user/0/com.termux/shared_prefs/custom_slash_commands.xml")
+    if not xml_path.exists():
+        xml_path = target_dir / "shared_prefs" / "custom_slash_commands.xml"
+    if not xml_path.exists():
+        return "skipped (AntiGem shared_prefs not found)"
+    try:
+        import xml.etree.ElementTree as ET
+        tree = ET.parse(xml_path)
+        node = tree.getroot().find('.//string[@name="commands"]')
+        if node is None or not node.text:
+            return "skipped (commands string node missing in XML)"
+        commands = json.loads(node.text)
+        commands = [c for c in commands if c.get("name") not in ("skills-manager", "route")]
+
+        script_dir = Path(__file__).resolve().parent
+        snippet_file = script_dir.parent / "templates" / "harnesses" / "antigem" / "custom_slash_commands_snippet.json"
+        if snippet_file.exists():
+            new_cmds = json.loads(snippet_file.read_text(encoding="utf-8"))
+        else:
+            new_cmds = [
+                {
+                    "name": "skills-manager",
+                    "description": "Autonomous Skills Router — discover, route, assemble 4-phase pipeline & report skills",
+                    "expansion": "skills-router route \"$ARGUMENTS\"",
+                    "pluginId": "",
+                    "skill": "skills-manager"
+                }
+            ]
+        commands.extend(new_cmds)
+        node.text = json.dumps(commands, indent=2)
+        tree.write(str(xml_path), encoding="utf-8", xml_declaration=True)
+        return f"updated {xml_path.name} (AntiGem /skills-manager and /route commands registered)"
+    except Exception as e:
+        return f"failed ({e})"
 
 def inject_or_create(target_path: Path, template_text: str) -> str:
     begin_marker = "<!-- skills-manager:routing-contract:begin -->"
@@ -1062,6 +1099,11 @@ def cmd_install_harness(harness_names: list[str], target_dir: Path) -> int:
     print(f"Installing harness integration(s) for: {', '.join(selected)} into '{target_dir}'...")
     installed_count = 0
     for h in selected:
+        if h == "antigem":
+            msg = install_antigem_commands(target_dir)
+            print(f"  ✔ [{h:8}] {msg}")
+            installed_count += 1
+            continue
         configs = HARNESS_MAP[h]
         for rel_dest, rel_src in configs:
             target_file = target_dir / rel_dest
@@ -1115,7 +1157,7 @@ def main():
 
     # install-harness
     inst_p = subparsers.add_parser("install-harness", help="Install router integration for major AI agent harnesses")
-    inst_p.add_argument("harness", nargs="*", default=["all"], help="Harnesses to configure: claude, gemini, cursor, windsurf, roo, aider, or all")
+    inst_p.add_argument("harness", nargs="*", default=["all"], help="Harnesses to configure: claude, gemini, cursor, windsurf, roo, aider, antigem, or all")
     inst_p.add_argument("--target", default=".", help="Target project directory")
 
     args = parser.parse_args()

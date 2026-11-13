@@ -1,0 +1,16 @@
+[
+  {
+    "name": "skills-manager",
+    "description": "Autonomous Skills Router — discover, route, assemble 4-phase pipeline & report skills",
+    "expansion": "Invoke the \"skills-manager\" meta-skill for this task: $ARGUMENTS\n\nFollow the Skills Manager deterministic routing workflow:\n1. Pre-Flight Routing: Run `skills-router route \"$ARGUMENTS\"` (or use the Two-Stage Deterministic Routing Engine).\n2. Follow the Decision Triad:\n   - If `route`: Adopt the returned skill(s) or minimal disjoint multi-skill plan. Declare the 4-phase pipeline (Guardrails → Pre-Execution → Execution → Verification) and read only the matched SKILL.md file(s) (progressive disclosure).\n   - If `ambiguous`: Present the competing choices to the user and ask for clarification before editing code.\n   - If `no_route`: Proceed with standard generalist reasoning.\n3. User-Facing Skill Reporting Rule: In your response, explicitly report in a few words what skills were used and why:\n   > 🛠️ **Skills Applied:**\n   > - `<skill-name>`: <why it was used in 5-10 words>",
+    "pluginId": "",
+    "skill": "skills-manager"
+  },
+  {
+    "name": "route",
+    "description": "Fast route query to skills-router for optimal skill or multi-skill plan",
+    "expansion": "Route this task using the deterministic skills router: $ARGUMENTS\n\n1. Run `skills-router route \"$ARGUMENTS\"` to match the task against the project and global skill catalog.\n2. If routed, declare the 4-phase pipeline and execute using the matched skill instructions.\n3. In your response, report what skills are used and why in a few words:\n   > 🛠️ **Skills Applied:**\n   > - `<skill-name>`: <why in a few words>",
+    "pluginId": "",
+    "skill": "skills-manager"
+  }
+]
