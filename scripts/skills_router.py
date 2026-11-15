@@ -1030,7 +1030,7 @@ def install_antigem_commands(target_dir: Path) -> str:
         if node is None or not node.text:
             return "skipped (commands string node missing in XML)"
         commands = json.loads(node.text)
-        commands = [c for c in commands if c.get("name") not in ("skills-manager", "route")]
+        commands = [c for c in commands if c.get("name") not in ("skills-manager", "route", "route_skills")]
 
         script_dir = Path(__file__).resolve().parent
         snippet_file = script_dir.parent / "templates" / "harnesses" / "antigem" / "custom_slash_commands_snippet.json"

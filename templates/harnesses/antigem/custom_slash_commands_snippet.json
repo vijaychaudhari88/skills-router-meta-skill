@@ -12,5 +12,12 @@
     "expansion": "Route this task using the deterministic skills router: $ARGUMENTS\n\n1. Run `skills-router route \"$ARGUMENTS\"` to match the task against the project and global skill catalog.\n2. If routed, declare the 4-phase pipeline and execute using the matched skill instructions.\n3. In your response, report what skills are used and why in a few words:\n   > 🛠️ **Skills Applied:**\n   > - `<skill-name>`: <why in a few words>",
     "pluginId": "",
     "skill": "skills-manager"
+  },
+  {
+    "name": "route_skills",
+    "description": "Route task to optimal skills & build 4-phase pipeline",
+    "expansion": "Activate the `skills-manager` meta-skill and deterministic router for this request: $ARGUMENTS\n\nIf `$ARGUMENTS` is empty or unclear, first ask the user whether they want to:\n1. Route and execute a coding, debugging, or planning task,\n2. Sync and audit installed skills (`SKILLS_REGISTRY.md`), or\n3. Enable or disable a dormant skill (`enable` / `disable`),\nand wait for their reply before taking action.\n\nFollow the `skills-manager` protocol strictly:\n1. Deterministic Routing:\n   - If `scripts/skills_router.py` exists in the workspace, run:\n     `python3 scripts/skills_router.py route \"$ARGUMENTS\"`\n   - Otherwise, scan YAML frontmatter (`name`, `description`, `use_when`, `not_when`, `objects`) across `./.agents/skills/`, `./skills/`, `./.antigravity/skills/`, `~/.gemini/config/plugins/`, `~/.gemini/antigravity/skills/`, `~/.config/opencode/skills/`, and `~/.claude/skills/`.\n   - Enforce Local Sovereignty: project-level skills strictly override matching global plugins.\n2. Progressive Disclosure:\n   - Never read full `SKILL.md` bodies during discovery. Load full `SKILL.md` instructions ONLY for the routed skill(s).\n3. Decision Triad:\n   - `route`: Proceed with the winning skill or minimal disjoint multi-skill plan (<= 4 skills).\n   - `ambiguous`: Stop and ask the user to choose between competing skills before writing code.\n   - `no_route`: Do not force any skill; answer with standard generalist reasoning.\n4. 4-Phase Execution Pipeline & Reporting Contract:\n   - Organize active skills into: `Phase 1 (Guardrails) -> Phase 2 (Pre-Execution) -> Phase 3 (Execution) -> Phase 4 (Verification)`.\n   - Include the concise summary block in your response:\n     > 🛠️ **Skills Applied:**\n     > - `<skill-name>`: <5-10 word reason>",
+    "pluginId": "",
+    "skill": ""
   }
 ]
