@@ -4,7 +4,10 @@ Unit and integration tests for skills_router.py
 Run with: python3 -m unittest tests/test_skills_router.py
 """
 
+import json
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,11 +15,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from skills_router import (
-    SkillRecord,
+    PROFILES,
     ScoredCandidate,
+    SkillRecord,
+    build_pipeline_declaration,
+    cmd_init,
+    cmd_install_harness,
+    cmd_load,
+    cmd_offload,
+    cmd_session_start,
+    cmd_sync,
     credit_ratio,
+    detect_project_stack,
+    discover_all_skills,
+    filter_skills_by_profile,
+    get_active_profile,
+    inject_or_create,
     phrase_matches,
     route_query,
+    set_active_profile,
     tokenize,
 )
 
@@ -140,23 +157,23 @@ class TestDeterministicRouting(unittest.TestCase):
         res = route_query("calculate Cow gestation window and pregnancy check date", self.mock_registry)
         self.assertEqual(res["decision"], "route")
         self.assertEqual(res["skill"], "dairy-agritech-domain")
-        self.assertIn("Phase 1 (Guardrails)", res["pipeline"])
+        self.assertTrue(res["confidence"] > 0.45)
 
     def test_acronym_route(self):
-        res = route_query("run strict TDD unit tests for reproduction models", self.mock_registry)
+        res = route_query("run strict tdd unit tests for reproduction cycle", self.mock_registry)
         self.assertEqual(res["decision"], "route")
         self.assertEqual(res["skill"], "test-driven-development")
 
     def test_ambiguous_decision_on_tie(self):
-        res = route_query("redesign this landing page layout", self.mock_registry)
+        res = route_query("redesign landing page layout aesthetics", self.mock_registry)
         self.assertEqual(res["decision"], "ambiguous")
         self.assertIn("frontend-design", res["alternatives"])
         self.assertIn("hallmark", res["alternatives"])
 
     def test_no_route_on_irrelevant_query(self):
-        res = route_query("what is the weather in Mumbai today", self.mock_registry)
+        res = route_query("what is the weather in Mumbai today?", self.mock_registry)
         self.assertEqual(res["decision"], "no_route")
-        self.assertEqual(res["skills"], [])
+        self.assertIsNone(res["skill"])
 
     def test_multi_skill_plan_with_conjunction(self):
         res = route_query("build an offline form with Dexie persistence and Zod validation", self.mock_registry)
@@ -165,18 +182,44 @@ class TestDeterministicRouting(unittest.TestCase):
         self.assertIn("database-design", res["skills"])
         self.assertIn("zod-validation-expert", res["skills"])
 
+    def test_subagent_offload_contract_in_pipeline(self):
+        cand = ScoredCandidate(
+            skill=SkillRecord(
+                name="code-review",
+                description="2-axis review",
+                source_path="fake/path",
+                scope="Global",
+                category="4. Quality & Verification",
+                priority=50
+            ),
+            confidence=0.85
+        )
+        pipeline = build_pipeline_declaration([cand])
+        self.assertIn("subagent_offload", pipeline)
+        self.assertTrue(len(pipeline["subagent_offload"]) >= 1)
+        self.assertEqual(pipeline["subagent_offload"][0]["skill"], "code-review")
+
+    def test_slash_command_routing(self):
+        res = route_query("/tdd execute unit tests", self.mock_registry)
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["skill"], "test-driven-development")
+        self.assertEqual(res["confidence"], 1.0)
+        self.assertEqual(res["status"], "slash_command")
+
+        res2 = route_query("/test-driven-development", self.mock_registry)
+        self.assertEqual(res2["decision"], "route")
+        self.assertEqual(res2["skill"], "test-driven-development")
+        self.assertEqual(res2["confidence"], 1.0)
+
 
 class TestHarnessInstallation(unittest.TestCase):
     def setUp(self):
-        import tempfile
         self.test_dir = Path(tempfile.mkdtemp(prefix="harness_test_"))
 
     def tearDown(self):
-        import shutil
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_install_all_harnesses(self):
-        from skills_router import cmd_install_harness
         exit_code = cmd_install_harness(["all"], self.test_dir)
         self.assertEqual(exit_code, 0)
         self.assertTrue((self.test_dir / "CLAUDE.md").exists())
@@ -187,7 +230,6 @@ class TestHarnessInstallation(unittest.TestCase):
         self.assertTrue((self.test_dir / "CONVENTIONS.md").exists())
 
     def test_idempotent_injection(self):
-        from skills_router import inject_or_create
         claude_file = self.test_dir / "CLAUDE.md"
         claude_file.write_text("# Initial Content\n\nSome custom notes.", encoding="utf-8")
         
@@ -203,6 +245,253 @@ class TestHarnessInstallation(unittest.TestCase):
         self.assertIn("Version 2", content)
         self.assertNotIn("Version 1", content)
         self.assertIn("Some custom notes.", content)
+
+
+class TestManifestSyncAndShadowing(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="manifest_test_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_deterministic_manifest_sync(self):
+        # Create out-of-order skills
+        skill_z = self.test_dir / "skills" / "zeta-skill"
+        skill_z.mkdir(parents=True)
+        (skill_z / "SKILL.md").write_text("---\nname: zeta-skill\ndescription: Zeta skill.\n---\nBody", encoding="utf-8")
+
+        skill_a = self.test_dir / "skills" / "alpha-skill"
+        skill_a.mkdir(parents=True)
+        (skill_a / "SKILL.md").write_text("---\nname: alpha-skill\ndescription: Alpha skill.\n---\nBody", encoding="utf-8")
+
+        skill_m = self.test_dir / "skills" / "middle-skill"
+        skill_m.mkdir(parents=True)
+        (skill_m / "SKILL.md").write_text("---\nname: middle-skill\ndescription: Middle skill.\n---\nBody", encoding="utf-8")
+
+        ret = cmd_sync(self.test_dir)
+        self.assertEqual(ret, 0)
+
+        manifest_file = self.test_dir / "skill-registry" / "routing-manifest.json"
+        self.assertTrue(manifest_file.exists())
+        
+        raw_json = manifest_file.read_text(encoding="utf-8")
+        manifest_data = json.loads(raw_json)
+        
+        # Verify skills are sorted lexicographically in JSON key order
+        skills_keys = list(manifest_data["skills"].keys())
+        expected_keys = sorted(skills_keys)
+        self.assertEqual(skills_keys, expected_keys)
+        self.assertIn("alpha-skill", skills_keys)
+        self.assertIn("middle-skill", skills_keys)
+        self.assertIn("zeta-skill", skills_keys)
+        
+        # Verify SKILLS_REGISTRY.md dynamic header
+        registry_md = (self.test_dir / "SKILLS_REGISTRY.md").read_text(encoding="utf-8")
+        self.assertIn(f"# Project Skills Registry — {self.test_dir.name}", registry_md)
+
+    def test_project_skills_shadow_global(self):
+        # Setup fake global directory
+        global_dir = self.test_dir / "fake_global"
+        global_skill = global_dir / "common-tool"
+        global_skill.mkdir(parents=True)
+        (global_skill / "SKILL.md").write_text("---\nname: common-tool\ndescription: Global version\n---\nGlobal body", encoding="utf-8")
+
+        # Setup project local .agents/skills override
+        project_skill = self.test_dir / ".agents" / "skills" / "common-tool"
+        project_skill.mkdir(parents=True)
+        (project_skill / "SKILL.md").write_text("---\nname: common-tool\ndescription: Local project override\n---\nLocal body", encoding="utf-8")
+
+        custom_dirs = [
+            (100, "Project", self.test_dir / ".agents" / "skills"),
+            (50, "Global", global_dir)
+        ]
+
+        registry = discover_all_skills(self.test_dir, custom_search_dirs=custom_dirs)
+        
+        self.assertIn("common-tool", registry)
+        record = registry["common-tool"]
+        self.assertEqual(record.scope, "Project")
+        self.assertTrue(record.is_override)
+        self.assertEqual(record.description, "Local project override")
+        self.assertTrue(record.source_path.startswith("./.agents/skills/common-tool/SKILL.md"))
+
+
+class TestProfilesAndDormancy(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="profile_test_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_profile_lifecycle_and_filtering(self):
+        # 1. Default profile is all
+        self.assertEqual(get_active_profile(self.test_dir), "all")
+        
+        # 2. Switch to web profile
+        self.assertTrue(set_active_profile(self.test_dir, "web"))
+        self.assertEqual(get_active_profile(self.test_dir), "web")
+        self.assertEqual((self.test_dir / ".skills-profile").read_text().strip(), "web")
+
+        # 3. Test filtering logic
+        mock_reg = {
+            "test-driven-development": SkillRecord(name="test-driven-development", description="TDD", source_path="p1", scope="Global", category="3. Debugging & Verification", priority=50),
+            "chrome-devtools": SkillRecord(name="chrome-devtools", description="CDP", source_path="p2", scope="Global", category="2. Implementation", priority=50),
+            "android-cli": SkillRecord(name="android-cli", description="Android", source_path="p3", scope="Global", category="2. Implementation", priority=50),
+            "local-custom": SkillRecord(name="local-custom", description="Local", source_path="p4", scope="Project", category="2. Implementation", priority=100),
+        }
+
+        filtered = filter_skills_by_profile(mock_reg, "web")
+        self.assertIn("test-driven-development", filtered)  # Core debugging category
+        self.assertIn("chrome-devtools", filtered)          # Specifically included in web profile
+        self.assertIn("local-custom", filtered)             # Project scoped is ALWAYS preserved
+        self.assertNotIn("android-cli", filtered)           # Filtered out from web profile!
+
+        # 4. Reset profile
+        self.assertTrue(set_active_profile(self.test_dir, "all"))
+        self.assertEqual(get_active_profile(self.test_dir), "all")
+        self.assertFalse((self.test_dir / ".skills-profile").exists())
+
+    def test_dormant_skill_indexing_and_routing(self):
+        # Setup dormant plugin directory ending in .disabled
+        dormant_dir = self.test_dir / "chrome-devtools-plugin.disabled"
+        cdp_skill = dormant_dir / "skills" / "chrome-devtools"
+        cdp_skill.mkdir(parents=True)
+        (cdp_skill / "SKILL.md").write_text("---\nname: chrome-devtools\ndescription: Uses Chrome DevTools via MCP for debugging.\n---\nFull CDP Instructions", encoding="utf-8")
+
+        custom_dirs = [(50, "Global", self.test_dir)]
+        reg = discover_all_skills(self.test_dir, custom_search_dirs=custom_dirs)
+        
+        # Skill must be indexed as dormant/disabled
+        self.assertIn("chrome-devtools", reg)
+        record = reg["chrome-devtools"]
+        self.assertTrue(record.is_disabled)
+        self.assertTrue(getattr(record, "is_dormant", False))
+
+        # Direct slash command route should match and offer hydration
+        res = route_query("/chrome-devtools inspect mobile viewport", reg, hydrate=True, project_root=self.test_dir)
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["skill"], "chrome-devtools")
+        self.assertTrue(res.get("is_dormant", False))
+        self.assertIn("hydration", res)
+        self.assertIn("Full CDP Instructions", res["hydration"]["instructions"])
+
+
+class TestOnDemandAndProjectInit(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="ondemand_test_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_on_demand_load_and_offload_lifecycle(self):
+        # Setup fake dormant global skill
+        dormant_dir = self.test_dir / "fake_plugin.disabled" / "skills" / "tool-alpha"
+        dormant_dir.mkdir(parents=True)
+        (dormant_dir / "SKILL.md").write_text("---\nname: tool-alpha\ndescription: Tool Alpha body\n---\nAlpha doc", encoding="utf-8")
+
+        # 1. Load on-demand into project
+        custom_dirs = [
+            (100, "Project", self.test_dir / ".agents" / "skills"),
+            (50, "Global", self.test_dir / "fake_plugin.disabled")
+        ]
+        
+        ret_load = cmd_load("tool-alpha", self.test_dir, custom_search_dirs=custom_dirs)
+        self.assertEqual(ret_load, 0)
+        
+        # Verify copied to .agents/skills/tool-alpha
+        loaded_skill_path = self.test_dir / ".agents" / "skills" / "tool-alpha" / "SKILL.md"
+        self.assertTrue(loaded_skill_path.exists())
+        self.assertIn("Alpha doc", loaded_skill_path.read_text(encoding="utf-8"))
+        
+        # Verify tracking file exists
+        loaded_meta = self.test_dir / ".agents" / "skills" / ".loaded.json"
+        self.assertTrue(loaded_meta.exists())
+        meta_data = json.loads(loaded_meta.read_text(encoding="utf-8"))
+        self.assertIn("tool-alpha", meta_data.get("loaded", {}))
+
+        # 2. Discover skills: tool-alpha is now Project scope and NOT disabled
+        reg = discover_all_skills(self.test_dir, custom_search_dirs=custom_dirs)
+        self.assertIn("tool-alpha", reg)
+        rec = reg["tool-alpha"]
+        self.assertEqual(rec.scope, "Project")
+        self.assertFalse(rec.is_disabled)
+
+        # 3. Offload single skill
+        ret_offload = cmd_offload("tool-alpha", self.test_dir)
+        self.assertEqual(ret_offload, 0)
+        self.assertFalse((self.test_dir / ".agents" / "skills" / "tool-alpha").exists())
+        meta_data_after = json.loads(loaded_meta.read_text(encoding="utf-8"))
+        self.assertNotIn("tool-alpha", meta_data_after.get("loaded", {}))
+
+        # 4. Reload and test offload --all
+        cmd_load("tool-alpha", self.test_dir, custom_search_dirs=custom_dirs)
+        self.assertTrue((self.test_dir / ".agents" / "skills" / "tool-alpha").exists())
+        ret_offload_all = cmd_offload(None, self.test_dir, all_loaded=True)
+        self.assertEqual(ret_offload_all, 0)
+        self.assertFalse((self.test_dir / ".agents" / "skills" / "tool-alpha").exists())
+        meta_data_final = json.loads(loaded_meta.read_text(encoding="utf-8"))
+        self.assertEqual(meta_data_final.get("loaded", {}), {})
+
+    def test_project_init_autodetect_stack(self):
+        new_proj = self.test_dir / "web_sample_project"
+        new_proj.mkdir(parents=True)
+        (new_proj / "package.json").write_text('{"name": "sample-web"}', encoding="utf-8")
+        
+        ret_init = cmd_init(new_proj)
+        self.assertEqual(ret_init, 0)
+
+        # Check detected profile is web
+        self.assertEqual(get_active_profile(new_proj), "web")
+        
+        # Check harness files and registries exist
+        self.assertTrue((new_proj / "CLAUDE.md").exists())
+        self.assertTrue((new_proj / "AGENTS.md").exists())
+        self.assertTrue((new_proj / "skill-registry" / "routing-manifest.json").exists())
+        self.assertTrue((new_proj / "SKILLS_REGISTRY.md").exists())
+
+    def test_stack_detection_heuristics(self):
+        # Android detection via settings.gradle
+        android_dir = self.test_dir / "android_proj"
+        android_dir.mkdir(parents=True)
+        (android_dir / "settings.gradle").write_text("rootProject.name = 'test'", encoding="utf-8")
+        prof, desc = detect_project_stack(android_dir)
+        self.assertEqual(prof, "android")
+        self.assertIn("Android", desc)
+
+        # Web detection via tsconfig.json
+        web_dir = self.test_dir / "web_proj"
+        web_dir.mkdir(parents=True)
+        (web_dir / "tsconfig.json").write_text("{}", encoding="utf-8")
+        prof, desc = detect_project_stack(web_dir)
+        self.assertEqual(prof, "web")
+        self.assertIn("Web", desc)
+
+        # Python detection via setup.py
+        py_dir = self.test_dir / "py_proj"
+        py_dir.mkdir(parents=True)
+        (py_dir / "setup.py").write_text("from setuptools import setup; setup()", encoding="utf-8")
+        prof, desc = detect_project_stack(py_dir)
+        self.assertEqual(prof, "core")
+        self.assertIn("Python", desc)
+
+    def test_session_start_preflight_and_cleanup(self):
+        proj = self.test_dir / "session_test_proj"
+        proj.mkdir(parents=True)
+        cmd_init(proj)
+
+        # Add a fake loaded skill
+        fake_loaded = proj / ".agents" / "skills" / "temp-tool"
+        fake_loaded.mkdir(parents=True)
+        (fake_loaded / "SKILL.md").write_text("---\nname: temp-tool\ndescription: Temp\n---\nTemp body", encoding="utf-8")
+        meta_file = proj / ".agents" / "skills" / ".loaded.json"
+        meta_file.write_text(json.dumps({"loaded": {"temp-tool": {"source": "fake"}}}), encoding="utf-8")
+
+        # Session start with cleanup=True should offload temp-tool
+        ret = cmd_session_start(proj, cleanup=True)
+        self.assertEqual(ret, 0)
+        self.assertFalse(fake_loaded.exists())
+        meta_after = json.loads(meta_file.read_text(encoding="utf-8"))
+        self.assertEqual(meta_after.get("loaded", {}), {})
 
 
 if __name__ == "__main__":

@@ -107,31 +107,49 @@ python3 scripts/skills_router.py route "build an offline form with Dexie persist
 
 ## 🛠️ CLI Reference
 
-The router CLI provides 6 core subcommands:
+The router CLI provides a comprehensive command suite for deterministic routing, dormancy lifecycle, on-demand staging, and multi-harness management:
 
 ```bash
 # 1. Sync skills and compile SKILLS_REGISTRY.md and JSON manifest
 python3 scripts/skills_router.py sync [--root .]
 
-# 2. Route an incoming task query
-python3 scripts/skills_router.py route "<query>" [--debug]
+# 2. Route an incoming task query (supports /<slash-command> syntax and --hydrate)
+python3 scripts/skills_router.py route "<query>" [--debug] [--hydrate]
 
-# 3. Run the calibrated benchmark suite
+# 3. View or switch skill cluster profiles (all, core, web, android, ai)
+python3 scripts/skills_router.py profile [name]
+python3 scripts/skills_router.py surface [name]
+
+# 4. On-demand skill loading into project context (.agents/skills/)
+python3 scripts/skills_router.py load <skill-id> [--target <path>]
+
+# 5. Clean offloading of temporary loaded skills back to dormant baseline
+python3 scripts/skills_router.py offload <skill-id> [--target <path>]
+python3 scripts/skills_router.py offload --all [--target <path>]
+python3 scripts/skills_router.py unload --all
+
+# 6. One-command first-time project workspace setup (stack detection + harnesses)
+python3 scripts/skills_router.py init [path] [--profile <name>]
+
+# 7. Fast session pre-flight check and ephemeral skill cleanup (<20 tokens receipt)
+python3 scripts/skills_router.py session-start [--cleanup] [--target <path>]
+
+# 8. Run the calibrated benchmark suite
 python3 scripts/skills_router.py benchmark
 
-# 4. List all discovered skills, categories, scopes, and overrides
+# 9. List all discovered skills, categories, scopes, and overrides
 python3 scripts/skills_router.py list
 
-# 5. Disable a dormant or legacy skill (renames SKILL.md -> SKILL.md.disabled)
+# 10. Disable a dormant or legacy skill (renames SKILL.md -> SKILL.md.disabled)
 python3 scripts/skills_router.py disable <skill-id>
 
-# 6. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
+# 11. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
 python3 scripts/skills_router.py enable <skill-id>
 
-# 7. Install or update harness contracts for all 6 major agent harnesses
+# 12. Install or update harness contracts for all 7 major agent harnesses
 python3 scripts/skills_router.py install-harness all [--target <path>]
 
-# 8. Install integration for a specific harness (e.g. cursor, claude, windsurf)
+# 13. Install integration for a specific harness (e.g. cursor, claude, windsurf)
 python3 scripts/skills_router.py install-harness cursor --target .
 ```
 

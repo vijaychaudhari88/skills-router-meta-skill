@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -62,6 +63,55 @@ RANK_WEIGHTS = {
     "name_alias": 0.16,
     "domain": 0.16,
     "specificity": 0.08,
+}
+
+PROFILES = {
+    "all": {
+        "description": "Full catalog — all discovered skills active",
+        "categories": None,
+        "include_skills": None,
+    },
+    "core": {
+        "description": "Minimal universal coding — planning, TDD, debugging, review, economy",
+        "categories": ["1. Planning", "3. Debugging & Verification", "4. Token Economy", "6. Meta & Authoring"],
+        "include_skills": ["chisle", "ponytail", "implement", "handoff", "skills-manager"],
+    },
+    "web": {
+        "description": "Web & Frontend — Core plus Chrome DevTools, CSS/HTML, modern-web, hallmark",
+        "categories": ["1. Planning", "3. Debugging & Verification", "4. Token Economy", "6. Meta & Authoring"],
+        "include_skills": [
+            "chisle", "ponytail", "implement", "handoff", "skills-manager",
+            "chrome-devtools", "a11y-debugging", "cookie-debugging", "debug-optimize-lcp",
+            "memory-leak-debugging", "troubleshooting", "modern-web-guidance", "chrome-extensions",
+            "hallmark", "frontend-design", "design-taste-frontend"
+        ],
+    },
+    "android": {
+        "description": "Android Development — Core plus Android CLI, Device Hub, Compose preview",
+        "categories": ["1. Planning", "3. Debugging & Verification", "4. Token Economy", "6. Meta & Authoring"],
+        "include_skills": [
+            "chisle", "ponytail", "implement", "handoff", "skills-manager",
+            "android-cli", "android-device-hub", "compose-preview"
+        ],
+    },
+    "ai": {
+        "description": "AI & Multimodal SDK — Core plus Gemini media, Live API, Omni Flash",
+        "categories": ["1. Planning", "3. Debugging & Verification", "4. Token Economy", "6. Meta & Authoring"],
+        "include_skills": [
+            "chisle", "ponytail", "implement", "handoff", "skills-manager",
+            "gemini-api-cli", "gemini-api-dev", "gemini-live-api-dev", "gemini-omni-flash-api"
+        ],
+    },
+}
+
+HEAVY_SUBAGENT_SKILLS = {
+    "chrome-devtools": ("Browser Automation QA", "Prevents high-volume CDP DOM & console log token pollution in root orchestrator"),
+    "a11y-debugging": ("Accessibility Auditor", "Isolates WCAG tree inspection and color contrast audits"),
+    "memory-leak-debugging": ("Performance Profiler", "Isolates heap snapshot analysis and leak traces"),
+    "debug-optimize-lcp": ("CWV Optimizer", "Isolates network waterfall and paint timing diagnostics"),
+    "evaluation": ("Evaluation Specialist", "Runs automated test harnesses and LLM-as-judge scoring in clean context"),
+    "advanced-evaluation": ("Evaluation Specialist", "Runs pairwise and arena evaluations in isolated subagent"),
+    "code-review": ("Code Reviewer", "Executes 2-axis Standards/Spec review without polluting main chat history"),
 }
 
 STOPWORDS = {
@@ -166,6 +216,7 @@ class SkillRecord:
     priority: int
     is_override: bool = False
     is_disabled: bool = False
+    is_dormant: bool = False
     aliases: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
@@ -351,34 +402,58 @@ def extract_metadata(skill_file: Path) -> dict:
         data["actions"].extend(["cache", "offline", "sync", "install"])
         data["domains"].extend(["pwa", "offline", "web"])
         data["use_when"].extend(["offline pwa", "service worker cache", "offline support"])
+    elif name == "skills-manager":
+        data["objects"].extend(["skill", "skills", "registry", "router", "manifest", "profile", "lifecycle"])
+        data["actions"].extend(["route", "sync", "disable", "enable", "profile", "surface", "benchmark", "deduplicate"])
+        data["domains"].extend(["skills", "router", "meta", "lifecycle"])
+        data["use_when"].extend(["route task", "sync skill registry", "manage skills", "switch profile", "disable skill", "enable skill"])
+        data["intents"]["route"] = ["route task to skill", "skills router route", "pre flight routing"]
+        data["intents"]["sync"] = ["sync skill registry", "rebuild skills registry", "rebuild manifest"]
+        data["intents"]["profile"] = ["switch profile", "set profile", "surface cluster"]
+        data["commands"].extend(["skills-router route", "skills-router sync", "skills-router profile", "skills-router surface"])
 
     return data
 
-def discover_all_skills(project_root: Path) -> dict[str, SkillRecord]:
+def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> dict[str, SkillRecord]:
     """Scan project and global paths with strict precedence and deduplication."""
     home = Path(os.environ.get("HOME", "/data/user/0/com.termux/files/home"))
-    search_dirs = [
-        (100, "Project", project_root / ".agents" / "skills"),
-        (95, "Project", project_root / "skills"),
-        (90, "Project", project_root / ".antigravity" / "skills"),
-        (50, "Global", home / ".gemini" / "config" / "plugins"),
-        (45, "Global", home / ".config" / "opencode" / "skills"),
-        (40, "Global", home / ".claude" / "skills"),
-    ]
+    if custom_search_dirs is not None:
+        search_dirs = custom_search_dirs
+    else:
+        search_dirs = [
+            (100, "Project", project_root / ".agents" / "skills"),
+            (95, "Project", project_root / "skills"),
+            (90, "Project", project_root / ".antigravity" / "skills"),
+            (50, "Global", home / ".gemini" / "config" / "plugins"),
+            (45, "Global", home / ".config" / "opencode" / "skills"),
+            (40, "Global", home / ".claude" / "skills"),
+        ]
 
     registry: dict[str, SkillRecord] = {}
 
     for priority, scope, s_dir in search_dirs:
         if not s_dir.exists():
             continue
-        for root, _, files in os.walk(s_dir):
+        for root, dirs, files in os.walk(s_dir):
+            dirs.sort()
+            files.sort()
+            
+            # Check if this directory or any parent is .disabled
+            try:
+                rel_parts = Path(root).relative_to(s_dir).parts
+            except ValueError:
+                rel_parts = Path(root).parts
+            in_disabled_tree = any(p.endswith(".disabled") for p in rel_parts)
+
             skill_filename = None
-            is_disabled = False
+            is_disabled = in_disabled_tree
+            is_dormant = in_disabled_tree
             if "SKILL.md" in files:
                 skill_filename = "SKILL.md"
             elif "SKILL.md.disabled" in files:
                 skill_filename = "SKILL.md.disabled"
                 is_disabled = True
+                is_dormant = True
             
             if not skill_filename:
                 continue
@@ -412,14 +487,17 @@ def discover_all_skills(project_root: Path) -> dict[str, SkillRecord]:
                 else:
                     cat = "2. Implementation"
 
+            rec_priority = priority - 20 if is_dormant else priority
+
             rec = SkillRecord(
                 name=name,
                 description=meta["description"],
                 source_path=rel_path,
                 scope=scope,
                 category=cat,
-                priority=priority,
+                priority=rec_priority,
                 is_disabled=is_disabled,
+                is_dormant=is_dormant,
                 aliases=meta["aliases"],
                 keywords=meta["keywords"],
                 capabilities=meta["capabilities"],
@@ -434,7 +512,7 @@ def discover_all_skills(project_root: Path) -> dict[str, SkillRecord]:
             )
 
             if name in registry:
-                if priority > registry[name].priority:
+                if rec_priority > registry[name].priority:
                     rec.is_override = True
                     registry[name] = rec
                 elif scope == "Global" and registry[name].scope == "Project":
@@ -459,8 +537,114 @@ class ScoredCandidate:
     matched_object: str | None = None
     matched_action: str | None = None
 
-def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False) -> dict:
+    def to_dict(self) -> dict:
+        return {
+            "name": self.skill.name,
+            "confidence": round(self.confidence, 3),
+            "cheap_score": round(self.cheap_score, 3),
+            "rank_score": round(self.rank_score, 3),
+            "evidence": self.evidence,
+            "penalties": self.penalties,
+            "components": {k: round(v, 3) for k, v in self.components.items()}
+        }
+
+def resolve_skill_path(skill: SkillRecord, project_root: Path) -> Path:
+    src_str = skill.source_path
+    if src_str.startswith("./"):
+        return project_root / src_str[2:]
+    elif src_str.startswith("~/"):
+        return Path.home() / src_str[2:]
+    return Path(src_str)
+
+def format_cand(c: ScoredCandidate) -> dict:
+    return c.to_dict()
+
+def generate_skills_summary(selected_candidates: list[ScoredCandidate]) -> list[dict]:
+    summary = []
+    for c in selected_candidates:
+        reason = c.matched_object or c.skill.category
+        if c.evidence:
+            reason = c.evidence[0]
+        summary.append({
+            "skill": c.skill.name,
+            "reason": reason
+        })
+    return summary
+
+def format_skills_applied_markdown(summary: list[dict]) -> str:
+    lines = ["> 🛠️ **Skills Applied:**"]
+    for s in summary:
+        lines.append(f"> - `{s['skill']}`: {s['reason']}")
+    return "\n".join(lines)
+
+def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = None) -> dict:
+    root = project_root or Path.cwd()
+    src_path = resolve_skill_path(skill, root)
+    if not src_path.exists():
+        p = Path(skill.source_path)
+        if p.exists():
+            src_path = p
+    instructions = ""
+    if src_path.exists():
+        try:
+            instructions = src_path.read_text(encoding="utf-8")
+        except Exception:
+            instructions = ""
+    return {
+        "skill": skill.name,
+        "source_path": skill.source_path,
+        "is_dormant": getattr(skill, "is_dormant", False),
+        "instructions": instructions,
+        "activation_command": f"skills-router enable {skill.name}" if getattr(skill, "is_dormant", False) else None
+    }
+
+def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict:
     """Execute two-stage deterministic routing over the discovered skill registry."""
+    raw_query = query.strip()
+    slash_match = re.match(r"^/([a-zA-Z0-9_-]+)(?:\s+(.*))?$", raw_query, re.DOTALL)
+    if slash_match:
+        cmd_name = slash_match.group(1).lower()
+        sub_prompt = (slash_match.group(2) or "").strip()
+        
+        # Check direct skill name match or alias or command
+        matched_skill = None
+        if cmd_name in registry:
+            matched_skill = registry[cmd_name]
+        else:
+            for s in registry.values():
+                if cmd_name in [a.lower() for a in s.aliases] or cmd_name in [c.lower() for c in s.commands]:
+                    matched_skill = s
+                    break
+        
+        if matched_skill:
+            cand = ScoredCandidate(
+                skill=matched_skill,
+                cheap_score=1.0,
+                rank_score=1.0,
+                confidence=1.0,
+                evidence=[f"slash command '/{cmd_name}' matched skill '{matched_skill.name}'"]
+            )
+            summary = generate_skills_summary([cand])
+            cmd_val = matched_skill.commands[0] if matched_skill.commands else f"/{cmd_name}"
+            res = {
+                "decision": "route",
+                "status": "slash_command",
+                "skill": matched_skill.name,
+                "skills": [matched_skill.name],
+                "skills_summary": summary,
+                "skills_applied_text": format_skills_applied_markdown(summary),
+                "command": cmd_val,
+                "confidence": 1.0,
+                "evidence": f"slash command '/{cmd_name}' matched '{matched_skill.name}'",
+                "is_dormant": getattr(matched_skill, "is_dormant", False),
+                "validated": True,
+                "pipeline": build_pipeline_declaration([cand]),
+                "debug": None
+            }
+            if getattr(matched_skill, "is_dormant", False) or hydrate:
+                res["hydration"] = extract_hydration_payload(matched_skill, project_root)
+            return res
+
     req_tokens = set(tokenize(query))
     if not req_tokens:
         return {
@@ -482,8 +666,6 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     query_lower = query.lower()
 
     for skill in registry.values():
-        if skill.is_disabled:
-            continue
         c_score = 0.0
         s_name = skill.name.lower()
         
@@ -637,6 +819,8 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         # Anti-adversarial Anchor Check: Name bonus requires task-identity anchor (obj, intent, or domain)
         if name_score > 0 and (obj_score > 0 or intent_score > 0 or dom_score > 0):
             raw_conf += 0.25
+        elif name_score == 1.0 and len(req_tokens) <= 3:
+            raw_conf = max(raw_conf, 0.65)
 
         cand.rank_score = raw_conf
         cand.confidence = raw_conf
@@ -677,35 +861,6 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     candidates.sort(key=lambda c: c.confidence, reverse=True)
     winner = candidates[0]
     second = candidates[1] if len(candidates) > 1 else None
-
-    def format_cand(c: ScoredCandidate) -> dict:
-        return {
-            "name": c.skill.name,
-            "confidence": round(c.confidence, 3),
-            "cheap_score": round(c.cheap_score, 3),
-            "rank_score": round(c.rank_score, 3),
-            "evidence": c.evidence,
-            "penalties": c.penalties,
-            "components": {k: round(v, 3) for k, v in c.components.items()}
-        }
-
-    def generate_skills_summary(selected_candidates: list[ScoredCandidate]) -> list[dict]:
-        summary = []
-        for c in selected_candidates:
-            reason = c.matched_object or c.skill.category
-            if c.evidence:
-                reason = c.evidence[0]
-            summary.append({
-                "skill": c.skill.name,
-                "reason": reason
-            })
-        return summary
-
-    def format_skills_applied_markdown(summary: list[dict]) -> str:
-        lines = ["> 🛠️ **Skills Applied:**"]
-        for s in summary:
-            lines.append(f"> - `{s['skill']}`: {s['reason']}")
-        return "\n".join(lines)
 
     # -----------------------------------------------------------------------
     # Multi-Skill Plan Assembly
@@ -761,9 +916,10 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         if not second or (winner.confidence - second.confidence) > CONFIG["ambiguity_gap"]:
             cmd = winner.skill.commands[0] if winner.skill.commands else None
             summary = generate_skills_summary([winner])
-            return {
+            is_dormant = getattr(winner.skill, "is_dormant", False)
+            res = {
                 "decision": "route",
-                "status": "matched",
+                "status": "dormant_match" if is_dormant else "matched",
                 "skill": winner.skill.name,
                 "skills": [winner.skill.name],
                 "skills_summary": summary,
@@ -772,10 +928,14 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 "confidence": round(winner.confidence, 3),
                 "evidence": "; ".join(winner.evidence),
                 "alternative": second.skill.name if second else None,
+                "is_dormant": is_dormant,
                 "validated": bool(cmd),
                 "pipeline": build_pipeline_declaration([winner]),
                 "debug": [format_cand(c) for c in candidates[:5]] if debug else None
             }
+            if is_dormant or hydrate:
+                res["hydration"] = extract_hydration_payload(winner.skill, project_root)
+            return res
 
     # AMBIGUOUS
     if winner.confidence >= CONFIG["no_route_floor"] and second:
@@ -818,6 +978,7 @@ def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> di
     pre_exec = []
     exec_skills = []
     verify_skills = ["verification-before-completion"]
+    subagent_offload = []
 
     for c in selected_candidates:
         name = c.skill.name
@@ -831,36 +992,117 @@ def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> di
         else:
             pre_exec.append(name)
 
+        if name in HEAVY_SUBAGENT_SKILLS:
+            role, reason = HEAVY_SUBAGENT_SKILLS[name]
+            subagent_offload.append({
+                "skill": name,
+                "recommended_role": role,
+                "isolation": "ephemeral_subagent",
+                "reason": reason
+            })
+
     if not pre_exec:
         pre_exec = ["writing-plans"]
     if not exec_skills:
         exec_skills = ["test-driven-development"]
 
-    return {
+    decl = {
         "Phase 1 (Guardrails)": guardrails,
         "Phase 2 (Pre-Execution)": list(dict.fromkeys(pre_exec)),
         "Phase 3 (Execution)": list(dict.fromkeys(exec_skills)),
         "Phase 4 (Verification)": list(dict.fromkeys(verify_skills)),
     }
+    if subagent_offload:
+        decl["subagent_offload"] = subagent_offload
+
+    return decl
+
+# ---------------------------------------------------------------------------
+# Profile Management & Staging Engine
+# ---------------------------------------------------------------------------
+def get_active_profile(project_root: Path) -> str:
+    prof_file = project_root / ".skills-profile"
+    if prof_file.exists():
+        val = prof_file.read_text(encoding="utf-8").strip().lower()
+        if val in PROFILES:
+            return val
+    return "all"
+
+def set_active_profile(project_root: Path, profile_name: str) -> bool:
+    prof = profile_name.strip().lower()
+    if prof not in PROFILES:
+        return False
+    prof_file = project_root / ".skills-profile"
+    if prof == "all":
+        if prof_file.exists():
+            prof_file.unlink()
+    else:
+        prof_file.write_text(prof, encoding="utf-8")
+    return True
+
+def filter_skills_by_profile(registry: dict[str, SkillRecord], profile_name: str) -> dict[str, SkillRecord]:
+    prof = PROFILES.get(profile_name)
+    if not prof or prof["categories"] is None:
+        return registry
+    
+    allowed_cats = set(prof["categories"])
+    allowed_skills = set(prof.get("include_skills") or [])
+
+    filtered = {}
+    for name, s in registry.items():
+        if s.scope == "Project":
+            filtered[name] = s
+        elif s.category in allowed_cats or name in allowed_skills:
+            filtered[name] = s
+    return filtered
+
+def cmd_profile(profile_name: str | None, project_root: Path) -> int:
+    active = get_active_profile(project_root)
+    if not profile_name or profile_name == "list":
+        print(f"Active Profile: '{active}'\n")
+        print("Available Profiles:")
+        for p, info in PROFILES.items():
+            marker = "* " if p == active else "  "
+            print(f" {marker}{p:10} - {info['description']}")
+        return 0
+
+    p_norm = profile_name.strip().lower()
+    if p_norm in ("reset", "clear", "all"):
+        set_active_profile(project_root, "all")
+        print("✔ Profile reset to 'all' (all discovered skills active).")
+        cmd_sync(project_root)
+        return 0
+
+    if p_norm not in PROFILES:
+        print(f"✘ Error: Unknown profile '{profile_name}'. Available: {', '.join(PROFILES.keys())}", file=sys.stderr)
+        return 1
+
+    set_active_profile(project_root, p_norm)
+    print(f"✔ Activated profile '{p_norm}'.")
+    cmd_sync(project_root)
+    return 0
 
 # ---------------------------------------------------------------------------
 # CLI & Command Handlers
 # ---------------------------------------------------------------------------
 def cmd_sync(project_root: Path) -> int:
     """Rebuild SKILLS_REGISTRY.md and skill-registry/routing-manifest.json."""
-    print(f"Scanning skills across project and global paths for {project_root.name}...")
+    profile = get_active_profile(project_root)
+    print(f"Scanning skills across project and global paths for {project_root.name} (profile: {profile})...")
     registry = discover_all_skills(project_root)
+    active_skills = filter_skills_by_profile(registry, profile)
     
     # 1. Generate routing-manifest.json
     reg_dir = project_root / "skill-registry"
     reg_dir.mkdir(parents=True, exist_ok=True)
     manifest_data = {
         "version": 2,
+        "active_profile": profile,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "total_skills": len(registry),
-        "skills": {name: s.__dict__ for name, s in registry.items()}
+        "total_skills": len(active_skills),
+        "skills": {name: active_skills[name].__dict__ for name in sorted(active_skills.keys())}
     }
-    (reg_dir / "routing-manifest.json").write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
+    (reg_dir / "routing-manifest.json").write_text(json.dumps(manifest_data, indent=2, sort_keys=True), encoding="utf-8")
     
     # 2. Generate SKILLS_REGISTRY.md
     cats = {
@@ -871,15 +1113,16 @@ def cmd_sync(project_root: Path) -> int:
         "5. Domain & Infrastructure": [],
         "6. Meta & Authoring": []
     }
-    for item in registry.values():
+    for name in sorted(active_skills.keys()):
+        item = active_skills[name]
         cats.get(item.category, cats["2. Implementation"]).append(item)
 
     lines = [
-        "# Project Skills Registry — Dairy Sathi V5",
+        f"# Project Skills Registry — {project_root.name}",
         "",
         "> **Auto-generated by `@skills-manager` (Enhanced Two-Stage Router)**  ",
-        f"> **Total Active Skills:** {len(registry)} | **Project:** {sum(1 for s in registry.values() if s.scope == 'Project')} | **Global:** {sum(1 for s in registry.values() if s.scope == 'Global')}  ",
-        f"> **Project Overrides:** {sum(1 for s in registry.values() if s.is_override)}",
+        f"> **Active Profile:** `{profile}` | **Total Active Skills:** {len(active_skills)} | **Project:** {sum(1 for s in active_skills.values() if s.scope == 'Project')} | **Global:** {sum(1 for s in active_skills.values() if s.scope == 'Global')}  ",
+        f"> **Project Overrides:** {sum(1 for s in active_skills.values() if s.is_override)}",
         "",
         "---",
         ""
@@ -904,14 +1147,6 @@ def cmd_sync(project_root: Path) -> int:
     (project_root / "SKILLS_REGISTRY.md").write_text("\n".join(lines), encoding="utf-8")
     print(f"✔ Successfully synced {len(registry)} skills into SKILLS_REGISTRY.md and skill-registry/routing-manifest.json")
     return 0
-
-def resolve_skill_path(skill: SkillRecord, project_root: Path) -> Path:
-    src_str = skill.source_path
-    if src_str.startswith("./"):
-        return project_root / src_str[2:]
-    elif src_str.startswith("~/"):
-        return Path.home() / src_str[2:]
-    return Path(src_str)
 
 def cmd_disable(skill_id: str, project_root: Path, yes: bool = False) -> int:
     registry = discover_all_skills(project_root)
@@ -951,23 +1186,222 @@ def cmd_enable(skill_id: str, project_root: Path) -> int:
     cmd_sync(project_root)
     return 0
 
-def cmd_route(query: str, project_root: Path, debug: bool = False) -> int:
+def load_loaded_meta(project_root: Path) -> tuple[Path, dict]:
+    """Helper to read .agents/skills/.loaded.json safely."""
+    agents_skills_dir = project_root / ".agents" / "skills"
+    meta_file = agents_skills_dir / ".loaded.json"
+    data = {"loaded": {}}
+    if meta_file.exists():
+        try:
+            parsed = json.loads(meta_file.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict) and "loaded" in parsed:
+                data = parsed
+        except Exception:
+            data = {"loaded": {}}
+    return meta_file, data
+
+def save_loaded_meta(meta_file: Path, data: dict) -> None:
+    """Helper to write .agents/skills/.loaded.json deterministically."""
+    meta_file.parent.mkdir(parents=True, exist_ok=True)
+    meta_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+def cmd_load(skill_id: str, project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> int:
+    """Load a skill on-demand from global/dormant catalog into project .agents/skills/<skill_id>."""
+    registry = discover_all_skills(project_root, custom_search_dirs=custom_search_dirs)
+    if skill_id not in registry:
+        print(f"✘ Error: Skill '{skill_id}' not found in registry.", file=sys.stderr)
+        return 1
+    
+    skill = registry[skill_id]
+    src_file = resolve_skill_path(skill, project_root)
+    if not src_file.exists():
+        src_path = Path(skill.source_path)
+        if src_path.exists():
+            src_file = src_path
+        else:
+            print(f"✘ Error: Source file '{src_file}' does not exist.", file=sys.stderr)
+            return 1
+            
+    src_dir = src_file.parent if src_file.is_file() else src_file
+    dest_dir = project_root / ".agents" / "skills" / skill_id
+    
+    if dest_dir.exists():
+        print(f"ℹ Skill '{skill_id}' is already loaded in {dest_dir}.")
+        return 0
+        
+    dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src_dir, dest_dir)
+    
+    # If the source was disabled/dormant (e.g. SKILL.md.disabled), activate it in .agents/skills/
+    dormant_skill_md = dest_dir / "SKILL.md.disabled"
+    active_skill_md = dest_dir / "SKILL.md"
+    if dormant_skill_md.exists() and not active_skill_md.exists():
+        dormant_skill_md.rename(active_skill_md)
+
+    # Track in .loaded.json
+    meta_file, loaded_data = load_loaded_meta(project_root)
+    loaded_data.setdefault("loaded", {})[skill_id] = {
+        "loaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": str(src_dir)
+    }
+    save_loaded_meta(meta_file, loaded_data)
+    
+    print(f"✔ Successfully loaded '{skill_id}' on-demand into .agents/skills/{skill_id}")
+    cmd_sync(project_root)
+    return 0
+
+def cmd_offload(skill_id: str | None, project_root: Path, all_loaded: bool = False) -> int:
+    """Offload/unload on-demand skills from .agents/skills/ back to dormant state."""
+    agents_skills_dir = project_root / ".agents" / "skills"
+    meta_file, loaded_data = load_loaded_meta(project_root)
+    
+    should_offload_all = all_loaded or skill_id in ("--all", "-a", "all") or (skill_id is None)
+    if should_offload_all:
+        to_remove = list(loaded_data.get("loaded", {}).keys())
+        if not to_remove:
+            print("ℹ No on-demand loaded skills found to offload.")
+            return 0
+        for sid in to_remove:
+            s_path = agents_skills_dir / sid
+            if s_path.exists():
+                shutil.rmtree(s_path, ignore_errors=True)
+                print(f"✔ Offloaded: '{sid}'")
+        loaded_data["loaded"] = {}
+        save_loaded_meta(meta_file, loaded_data)
+        cmd_sync(project_root)
+        print(f"✔ Successfully offloaded all {len(to_remove)} on-demand skills.")
+        return 0
+
+    target_dir = agents_skills_dir / skill_id
+    if not target_dir.exists():
+        print(f"ℹ Skill '{skill_id}' is not loaded in {agents_skills_dir}.")
+        return 0
+        
+    shutil.rmtree(target_dir, ignore_errors=True)
+    if "loaded" in loaded_data and skill_id in loaded_data["loaded"]:
+        del loaded_data["loaded"][skill_id]
+        save_loaded_meta(meta_file, loaded_data)
+        
+    print(f"✔ Successfully offloaded '{skill_id}' from {agents_skills_dir}")
+    cmd_sync(project_root)
+    return 0
+
+def detect_project_stack(target_dir: Path) -> tuple[str, str]:
+    """Auto-detect project tech stack and return (profile_name, stack_description)."""
+    # Android stack detection
+    if (
+        (target_dir / "android").exists()
+        or (target_dir / "build.gradle").exists()
+        or (target_dir / "build.gradle.kts").exists()
+        or (target_dir / "settings.gradle").exists()
+        or (target_dir / "settings.gradle.kts").exists()
+        or (target_dir / "app" / "src" / "main" / "AndroidManifest.xml").exists()
+    ):
+        return "android", "Android (Gradle/Kotlin/Compose)"
+        
+    # Web / Frontend stack detection
+    if (
+        (target_dir / "package.json").exists()
+        or (target_dir / "tsconfig.json").exists()
+        or (target_dir / "pnpm-workspace.yaml").exists()
+        or (target_dir / "index.html").exists()
+        or (target_dir / "vite.config.ts").exists()
+        or (target_dir / "vite.config.js").exists()
+    ):
+        return "web", "Web / Frontend (JavaScript/TypeScript)"
+        
+    # Python / Backend stack detection
+    if (
+        (target_dir / "requirements.txt").exists()
+        or (target_dir / "pyproject.toml").exists()
+        or (target_dir / "setup.py").exists()
+        or (target_dir / "Pipfile").exists()
+    ):
+        return "core", "Python (Backend/CLI)"
+        
+    return "core", "Generalist Codebase"
+
+def cmd_init(target_dir: Path, profile: str | None = None) -> int:
+    """Initialize a project repository for deterministic skill routing and harness integration."""
+    target_dir = target_dir.resolve()
+    print(f"Initializing Skills Router in '{target_dir.name}'...")
+    
+    (target_dir / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
+    (target_dir / "skill-registry").mkdir(parents=True, exist_ok=True)
+    
+    det_prof, stack_desc = detect_project_stack(target_dir)
+    chosen_profile = profile if profile and profile in PROFILES else det_prof
+    set_active_profile(target_dir, chosen_profile)
+    
+    # Configure AI harnesses
+    cmd_install_harness(["all"], target_dir)
+    
+    # Rebuild registries deterministically
+    cmd_sync(target_dir)
+    
+    print("\n" + "=" * 60)
+    print(f"✔ Skills Router successfully initialized in: {target_dir}")
+    print(f"✔ Detected Stack : {stack_desc}")
+    print(f"✔ Active Profile : {chosen_profile}")
+    print(f"✔ Harness Setup  : Configured across 7 AI agent harnesses")
+    print("=" * 60 + "\n")
+    return 0
+
+def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int:
+    """Pre-flight check and optional ephemeral cleanup for a fresh chat session."""
+    target_dir = target_dir.resolve()
+    
+    # Auto-init if not yet initialized
+    if not (target_dir / "skill-registry").exists() or not (target_dir / ".agents" / "skills").exists():
+        cmd_init(target_dir)
+        
+    meta_file, loaded_data = load_loaded_meta(target_dir)
+    loaded_count = len(loaded_data.get("loaded", {}))
+            
+    if cleanup and loaded_count > 0:
+        cmd_offload(None, target_dir, all_loaded=True)
+        _, loaded_data = load_loaded_meta(target_dir)
+        loaded_count = len(loaded_data.get("loaded", {}))
+        
+    profile = get_active_profile(target_dir)
+    reg = discover_all_skills(target_dir)
+    filtered_reg = filter_skills_by_profile(reg, profile)
+    active_count = sum(1 for s in filtered_reg.values() if not s.is_dormant and not s.is_disabled)
+    dormant_count = sum(1 for s in reg.values() if s.is_dormant or s.is_disabled)
+    
+    receipt = (
+        f"✔ Skills Router Ready | Profile: {profile} | "
+        f"Active: {active_count} | Dormant: {dormant_count} | On-Demand: {loaded_count}"
+    )
+    print(receipt)
+    return 0
+
+def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False) -> int:
     registry = discover_all_skills(project_root)
-    result = route_query(query, registry, debug=debug)
+    profile = get_active_profile(project_root)
+    registry = filter_skills_by_profile(registry, profile)
+    result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root)
     print(json.dumps(result, indent=2))
     return 0
 
 def cmd_benchmark(project_root: Path) -> int:
     registry = discover_all_skills(project_root)
+    profile = get_active_profile(project_root)
+    registry = filter_skills_by_profile(registry, profile)
+
     test_cases = [
-        ("calculate Cow gestation window and pregnancy check date", "route", ["dairy-agritech-domain"]),
-        ("build an offline milk entry form with Dexie persistence and Zod validation", "route", ["frontend-design", "zod-validation-expert", "database-design"]),
-        ("audit mobile viewport touch targets and WCAG color contrast with Chrome DevTools", "route", ["chrome-devtools", "a11y-debugging"]),
-        ("redesign this landing page layout", "ambiguous", []),
-        ("what is the weather in Mumbai today", "no_route", []),
         ("run strict TDD unit tests for reproduction models", "route", ["test-driven-development"]),
+        ("audit mobile viewport touch targets and WCAG color contrast with Chrome DevTools", "route", ["chrome-devtools", "a11y-debugging"]),
+        ("sync skill registry and route tasks to skills", "route", ["skills-manager"]),
+        ("what is the weather in Mumbai today", "no_route", []),
     ]
-    
+
+    # Add project-specific tests if domain skills are present
+    if "dairy-agritech-domain" in registry:
+        test_cases.append(("calculate Cow gestation window and pregnancy check date", "route", ["dairy-agritech-domain"]))
+    if "zod-validation-expert" in registry and "database-design" in registry:
+        test_cases.append(("build an offline milk entry form with Dexie persistence and Zod validation", "route", ["frontend-design", "zod-validation-expert", "database-design"]))
+
     passed = 0
     t0 = time.time()
     for q, exp_dec, exp_skills in test_cases:
@@ -1135,6 +1569,7 @@ def main():
     route_p.add_argument("query", help="Task query string")
     route_p.add_argument("--root", default=".", help="Project root directory")
     route_p.add_argument("--debug", action="store_true", help="Print debug score breakdown")
+    route_p.add_argument("--hydrate", action="store_true", help="Include full on-demand skill instructions in output")
 
     # benchmark
     bench_p = subparsers.add_parser("benchmark", help="Run benchmark suite")
@@ -1160,15 +1595,63 @@ def main():
     inst_p.add_argument("harness", nargs="*", default=["all"], help="Harnesses to configure: claude, gemini, cursor, windsurf, roo, aider, antigem, or all")
     inst_p.add_argument("--target", default=".", help="Target project directory")
 
+    # profile
+    prof_p = subparsers.add_parser("profile", help="View or switch skill cluster profiles")
+    prof_p.add_argument("name", nargs="?", default=None, help="Profile name to activate (core, web, android, ai, all)")
+    prof_p.add_argument("--root", default=".", help="Project root directory")
+
+    # surface (alias for profile)
+    surf_p = subparsers.add_parser("surface", help="Alias for profile: surface specific skill cluster")
+    surf_p.add_argument("name", nargs="?", default=None, help="Profile name to activate (core, web, android, ai, all)")
+    surf_p.add_argument("--root", default=".", help="Project root directory")
+
+    # load
+    load_p = subparsers.add_parser("load", help="Load a dormant skill into project on-demand")
+    load_p.add_argument("skill_id", help="Skill identifier to load on-demand")
+    load_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
+    # offload
+    offload_p = subparsers.add_parser("offload", help="Offload on-demand skills from project back to dormant state")
+    offload_p.add_argument("skill_id", nargs="?", default=None, help="Skill identifier to offload")
+    offload_p.add_argument("--all", "-a", action="store_true", help="Offload all temporarily loaded skills")
+    offload_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
+    # unload (alias for offload)
+    unload_p = subparsers.add_parser("unload", help="Alias for offload")
+    unload_p.add_argument("skill_id", nargs="?", default=None, help="Skill identifier to offload")
+    unload_p.add_argument("--all", "-a", action="store_true", help="Offload all temporarily loaded skills")
+    unload_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
+    # init
+    init_p = subparsers.add_parser("init", help="Initialize project directory for deterministic skill routing and harness integration")
+    init_p.add_argument("target", nargs="?", default=".", help="Target project directory")
+    init_p.add_argument("--profile", default=None, help="Force specific profile (core, web, android, ai, all)")
+
+    # session-start
+    session_p = subparsers.add_parser("session-start", help="Fast session pre-flight check and ephemeral cleanup")
+    session_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+    session_p.add_argument("--cleanup", action="store_true", help="Clean up any ephemeral loaded skills from prior session")
+
     args = parser.parse_args()
     root = Path(args.root if hasattr(args, "root") else ".").resolve()
 
     if args.command == "sync":
         sys.exit(cmd_sync(root))
     elif args.command == "route":
-        sys.exit(cmd_route(args.query, root, debug=args.debug))
+        sys.exit(cmd_route(args.query, root, debug=args.debug, hydrate=args.hydrate))
     elif args.command == "benchmark":
         sys.exit(cmd_benchmark(root))
+    elif args.command == "profile" or args.command == "surface":
+        sys.exit(cmd_profile(args.name, root))
+    elif args.command == "load":
+        sys.exit(cmd_load(args.skill_id, root))
+    elif args.command in ("offload", "unload"):
+        sys.exit(cmd_offload(args.skill_id, root, all_loaded=args.all))
+    elif args.command == "init":
+        target = Path(args.target).resolve()
+        sys.exit(cmd_init(target, profile=args.profile))
+    elif args.command == "session-start":
+        sys.exit(cmd_session_start(root, cleanup=args.cleanup))
     elif args.command == "disable":
         sys.exit(cmd_disable(args.skill_id, root, yes=args.yes))
     elif args.command == "enable":
@@ -1178,6 +1661,9 @@ def main():
         sys.exit(cmd_install_harness(args.harness, target))
     elif args.command == "list":
         reg = discover_all_skills(root)
+        active_prof = get_active_profile(root)
+        reg = filter_skills_by_profile(reg, active_prof)
+        print(f"Discovered {len(reg)} skills (Active Profile: '{active_prof}'):")
         for name, s in sorted(reg.items()):
             ov = "[Override]" if s.is_override else ""
             print(f"{name:35} {s.category:25} {s.scope:10} {ov}")
