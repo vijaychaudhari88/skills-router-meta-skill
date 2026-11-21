@@ -1,0 +1,21 @@
+---
+description: "Autonomous Skill Router and 4-phase execution pipeline"
+globs: "*"
+alwaysApply: true
+---
+
+<!-- skills-manager:routing-contract:begin -->
+# Cursor Autonomous Skill Router Rules
+
+Before generating code, editing files, or executing terminal tasks in Composer/Agent:
+1. **Pre-Flight Routing:**
+   Execute the deterministic router:
+   ```bash
+   python3 scripts/skills_router.py route "<task description>"
+   ```
+2. **Decision Triad:**
+   - **`route`**: Read only the target `SKILL.md` document(s) (progressive disclosure). Structure your response into the 4-phase pipeline (`Guardrails → Pre-Execution → Execution → Verification`).
+   - **`ambiguous`**: If a tie is detected, ask the user to clarify between the listed candidates before making edits.
+   - **`no_route`**: Standard generalist coding response.
+3. **Local Sovereignty:** Local project skills in `./.agents/skills/` and `./skills/` always override global plugins.
+<!-- skills-manager:routing-contract:end -->
