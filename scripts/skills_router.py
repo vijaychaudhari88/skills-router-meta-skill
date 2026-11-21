@@ -362,6 +362,11 @@ def extract_metadata(skill_file: Path) -> dict:
                     raw_desc = line_str[12:].strip().strip("\"'").lstrip(">-").strip()
                     desc_lines.append(raw_desc)
                     capture_desc = True
+                elif line_str.startswith("aliases:"):
+                    raw_aliases = line_str[8:].strip().strip("[]'\"")
+                    data["aliases"].extend([a.strip().strip("'\"") for a in raw_aliases.split(",") if a.strip()])
+                    capture_desc = False
+                    current_list_key = None
                 elif line_str.startswith("commands:"):
                     raw_cmds = line_str[9:].strip().strip("[]\"'")
                     data["commands"] = [c.strip().strip("\"'") for c in raw_cmds.split(",") if c.strip()]
@@ -1007,7 +1012,7 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             matched_skill = registry[cmd_name]
         else:
             for s in registry.values():
-                if cmd_name in [a.lower() for a in s.aliases] or cmd_name in [c.lower() for c in s.commands]:
+                if cmd_name in [a.lower().lstrip('/') for a in s.aliases] or cmd_name in [c.lower().lstrip('/') for c in s.commands]:
                     matched_skill = s
                     break
         
