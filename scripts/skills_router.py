@@ -891,6 +891,30 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         cand.components = components
 
     # -----------------------------------------------------------------------
+    # Adaptive Empirical Feedback Calibration (Action 2)
+    # -----------------------------------------------------------------------
+    if project_root is not None:
+        try:
+            _, history_data = load_routing_history(project_root)
+            skills_history = history_data.get("skills", {})
+            for cand in candidates:
+                stat = skills_history.get(cand.skill.name)
+                if stat:
+                    s_count = stat.get("success", 0)
+                    f_count = stat.get("failure", 0)
+                    total = s_count + f_count
+                    if total >= 3:
+                        smoothed_rate = (s_count + 1) / (total + 2)
+                        if smoothed_rate >= 0.75:
+                            cand.confidence += 0.05
+                            cand.evidence.append(f"proven_track_record ({s_count}/{total} ok)")
+                        elif smoothed_rate <= 0.35:
+                            cand.confidence *= 0.80
+                            cand.penalties.append(f"unreliable_track_record ({s_count}/{total} ok)")
+        except Exception:
+            pass
+
+    # -----------------------------------------------------------------------
     # Defensive Penalties (3 Passes)
     # -----------------------------------------------------------------------
     for cand in candidates:
@@ -1267,6 +1291,81 @@ def save_loaded_meta(meta_file: Path, data: dict) -> None:
     """Helper to write .agents/skills/.loaded.json deterministically."""
     meta_file.parent.mkdir(parents=True, exist_ok=True)
     meta_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+def load_routing_history(project_root: Path | str) -> tuple[Path, dict]:
+    """Helper to read .agents/skills/.routing-history.json safely."""
+    p_root = Path(project_root)
+    agents_skills_dir = p_root / ".agents" / "skills"
+    history_file = agents_skills_dir / ".routing-history.json"
+    data = {"version": 1, "skills": {}}
+    if history_file.exists():
+        try:
+            parsed = json.loads(history_file.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict) and "skills" in parsed:
+                data = parsed
+        except Exception:
+            data = {"version": 1, "skills": {}}
+    return history_file, data
+
+def save_routing_history(history_file: Path, data: dict) -> None:
+    """Helper to write .agents/skills/.routing-history.json deterministically."""
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    history_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+def cmd_record(skill_id: str, outcome: str, project_root: Path | str, query: str | None = None) -> int:
+    """Record execution feedback (success/failure) for a routed skill."""
+    norm_outcome = outcome.strip().lower()
+    if norm_outcome not in ("success", "failure", "pass", "fail", "1", "0"):
+        print(f"✘ Error: Invalid outcome '{outcome}'. Expected 'success' or 'failure'.", file=sys.stderr)
+        return 1
+
+    p_root = Path(project_root)
+    is_success = norm_outcome in ("success", "pass", "1")
+    history_file, history_data = load_routing_history(p_root)
+    skills_map = history_data.setdefault("skills", {})
+
+    record = skills_map.setdefault(skill_id, {
+        "success": 0,
+        "failure": 0,
+        "last_used": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    })
+
+    if is_success:
+        record["success"] += 1
+    else:
+        record["failure"] += 1
+    record["last_used"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if query:
+        record["last_query"] = query[:120]
+
+    save_routing_history(history_file, history_data)
+    total = record["success"] + record["failure"]
+    rate = (record["success"] / total) * 100.0 if total > 0 else 0.0
+    status_label = "✔ Recorded SUCCESS" if is_success else "✘ Recorded FAILURE"
+    print(f"{status_label} for '{skill_id}': {record['success']}/{total} successful ({rate:.1f}% rate)")
+    return 0
+
+def cmd_stats(project_root: Path) -> int:
+    """Show execution performance statistics from .routing-history.json."""
+    _, history_data = load_routing_history(project_root)
+    skills_map = history_data.get("skills", {})
+    if not skills_map:
+        print("ℹ No execution history recorded yet. Use 'skills-router record <skill_id> --outcome <success|failure>'.")
+        return 0
+
+    print(f"\nExecution Feedback Statistics ({len(skills_map)} skills tracked):")
+    print(f"{'Skill Name':35} {'Success':8} {'Failure':8} {'Rate':10} {'Last Used':20}")
+    print("-" * 85)
+    for s_name in sorted(skills_map.keys()):
+        stat = skills_map[s_name]
+        s_count = stat.get("success", 0)
+        f_count = stat.get("failure", 0)
+        total = s_count + f_count
+        rate_str = f"{(s_count / total * 100.0):.1f}%" if total > 0 else "0.0%"
+        last_u = stat.get("last_used", "never")[:19]
+        print(f"{s_name:35} {s_count:<8} {f_count:<8} {rate_str:10} {last_u:20}")
+    print()
+    return 0
 
 def cmd_load(skill_id: str, project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> int:
     """Load a skill on-demand from global/dormant catalog into project .agents/skills/<skill_id>."""
@@ -1768,6 +1867,23 @@ def main():
     session_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
     session_p.add_argument("--cleanup", action="store_true", help="Clean up any ephemeral loaded skills from prior session")
 
+    # record / feedback
+    rec_p = subparsers.add_parser("record", help="Record task execution feedback (success or failure) for a skill")
+    rec_p.add_argument("skill_id", help="Skill identifier to record outcome for")
+    rec_p.add_argument("--outcome", "-o", default="success", help="Outcome of execution: success or failure (default: success)")
+    rec_p.add_argument("--query", "-q", default=None, help="Optional task query string")
+    rec_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
+    feed_p = subparsers.add_parser("feedback", help="Alias for record / show execution statistics")
+    feed_p.add_argument("skill_id", nargs="?", default=None, help="Skill identifier (optional if viewing stats)")
+    feed_p.add_argument("outcome", nargs="?", default=None, help="Execution outcome: success or failure")
+    feed_p.add_argument("--show", action="store_true", help="Display execution performance table")
+    feed_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
+    # stats
+    stats_p = subparsers.add_parser("stats", help="Display execution feedback performance statistics")
+    stats_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
     args = parser.parse_args()
     root = Path(args.root if hasattr(args, "root") else ".").resolve()
 
@@ -1791,6 +1907,19 @@ def main():
         sys.exit(cmd_init(target, profile=args.profile, wizard=True))
     elif args.command == "session-start":
         sys.exit(cmd_session_start(root, cleanup=args.cleanup))
+    elif args.command == "record":
+        sys.exit(cmd_record(args.skill_id, args.outcome, root, query=args.query))
+    elif args.command == "feedback":
+        if args.show or (args.skill_id is None and args.outcome is None):
+            sys.exit(cmd_stats(root))
+        elif args.skill_id and args.outcome:
+            sys.exit(cmd_record(args.skill_id, args.outcome, root))
+        elif args.skill_id:
+            sys.exit(cmd_record(args.skill_id, "success", root))
+        else:
+            sys.exit(cmd_stats(root))
+    elif args.command == "stats":
+        sys.exit(cmd_stats(root))
     elif args.command == "disable":
         sys.exit(cmd_disable(args.skill_id, root, yes=args.yes))
     elif args.command == "enable":

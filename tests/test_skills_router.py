@@ -569,6 +569,94 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
         self.assertEqual(r3["decision"], "route")
         self.assertEqual(r3["skill"], "chisle-review")
 
+    def test_record_execution_feedback_lifecycle(self):
+        """Test recording execution feedback and viewing stats via CLI handlers."""
+        import tempfile
+        import io
+        from contextlib import redirect_stdout
+        from skills_router import cmd_record, cmd_stats, load_routing_history
+
+        with tempfile.TemporaryDirectory(prefix="history_test_") as tmp_dir:
+            proj_root = Path(tmp_dir)
+
+            # 1. Initially empty history
+            hist_file, data = load_routing_history(proj_root)
+            self.assertEqual(data.get("skills"), {})
+
+            # 2. Record 2 successes and 1 failure for 'test-driven-development'
+            cmd_record("test-driven-development", "success", proj_root, query="run unit tests")
+            cmd_record("test-driven-development", "pass", proj_root, query="verify suite")
+            cmd_record("test-driven-development", "failure", proj_root, query="syntax error")
+
+            _, updated = load_routing_history(proj_root)
+            tdd_stats = updated["skills"]["test-driven-development"]
+            self.assertEqual(tdd_stats["success"], 2)
+            self.assertEqual(tdd_stats["failure"], 1)
+            self.assertEqual(tdd_stats["last_query"], "syntax error")
+
+            # 3. Output check via cmd_stats
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                res = cmd_stats(proj_root)
+            self.assertEqual(res, 0)
+            output = buf.getvalue()
+            self.assertIn("Execution Feedback Statistics", output)
+            self.assertIn("test-driven-development", output)
+            self.assertIn("66.7%", output)
+
+    def test_adaptive_scoring_with_history(self):
+        """Test that empirical success/failure history calibrates candidate confidence in Stage B."""
+        import tempfile
+        from skills_router import SkillRecord, route_query, cmd_record
+
+        with tempfile.TemporaryDirectory(prefix="adaptive_test_") as tmp_dir:
+            proj_root = Path(tmp_dir)
+
+            mock_registry = {
+                "proven-tool": SkillRecord(
+                    name="proven-tool",
+                    description="A dependable utility for executing data workflows.",
+                    source_path="fake/p",
+                    scope="Project",
+                    category="2. Planning & Architecture",
+                    priority=50,
+                    objects=["data", "workflow"],
+                    actions=["execute", "run"],
+                    domains=["workflow"],
+                    intents={"run": ["run data workflow", "execute data pipeline"]}
+                ),
+                "shaky-tool": SkillRecord(
+                    name="shaky-tool",
+                    description="An unstable utility for executing data workflows.",
+                    source_path="fake/s",
+                    scope="Project",
+                    category="2. Planning & Architecture",
+                    priority=50,
+                    objects=["data", "workflow"],
+                    actions=["execute", "run"],
+                    domains=["workflow"],
+                    intents={"run": ["run data workflow", "execute data pipeline"]}
+                ),
+            }
+
+            # Baseline query with no history
+            r_base_proven = route_query("run data workflow", mock_registry, project_root=proj_root)
+            self.assertEqual(r_base_proven["decision"], "ambiguous")
+
+            # Record 4 successes for proven-tool (smoothed rate = (4+1)/(4+2) = 5/6 = 83.3% >= 75%)
+            for _ in range(4):
+                cmd_record("proven-tool", "success", proj_root, query="run workflow")
+
+            # Record 3 failures for shaky-tool (smoothed rate = (0+1)/(3+2) = 1/5 = 20.0% <= 35%)
+            for _ in range(3):
+                cmd_record("shaky-tool", "failure", proj_root, query="run workflow")
+
+            # Route query with calibrated history
+            r_calibrated = route_query("run data workflow", mock_registry, project_root=proj_root)
+            self.assertEqual(r_calibrated["decision"], "route")
+            self.assertEqual(r_calibrated["skill"], "proven-tool")
+            self.assertIn("proven_track_record (4/4 ok)", r_calibrated["evidence"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -137,19 +137,26 @@ python3 scripts/skills_router.py session-start [--cleanup] [--target <path>]
 # 8. Run the calibrated benchmark suite
 python3 scripts/skills_router.py benchmark
 
-# 9. List all discovered skills, categories, scopes, and overrides
+# 9. Record task execution feedback for empirical calibration (Action 2)
+python3 scripts/skills_router.py record <skill-id> --outcome <success|failure> [--query "<task>"]
+
+# 10. View empirical skill execution statistics
+python3 scripts/skills_router.py stats
+python3 scripts/skills_router.py feedback --show
+
+# 11. List all discovered skills, categories, scopes, and overrides
 python3 scripts/skills_router.py list
 
-# 10. Disable a dormant or legacy skill (renames SKILL.md -> SKILL.md.disabled)
+# 12. Disable a dormant or legacy skill (renames SKILL.md -> SKILL.md.disabled)
 python3 scripts/skills_router.py disable <skill-id>
 
-# 11. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
+# 13. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
 python3 scripts/skills_router.py enable <skill-id>
 
-# 12. Install or update harness contracts for all 7 major agent harnesses
+# 14. Install or update harness contracts for all 7 major agent harnesses
 python3 scripts/skills_router.py install-harness all [--target <path>]
 
-# 13. Install integration for a specific harness (e.g. cursor, claude, windsurf)
+# 15. Install integration for a specific harness (e.g. cursor, claude, windsurf)
 python3 scripts/skills_router.py install-harness cursor --target .
 ```
 

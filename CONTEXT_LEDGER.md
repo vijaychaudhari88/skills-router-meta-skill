@@ -1,20 +1,19 @@
 # Context Ledger: Skills Router Meta-Skill & Token Optimization
 
-**Timestamp:** 2026-11-21T07:59:50+05:30  
+**Timestamp:** 2026-11-21T10:05:00+05:30  
 **Workspace Root:** `/data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill`  
-**Current Branch:** `main` (clean working tree, pushed to `origin/main` at `c440177`)  
-**Status:** All 21 Unit Tests PASS (0.70s) | Benchmark 4/4 PASS (~31ms / ~7.8ms/query)  
+**Current Branch:** `main` (Action 2 verified, pending commit)  
+**Status:** All 25 Unit Tests PASS (5.0s) | Benchmark 4/4 PASS (~41ms / ~10.3ms/query)  
 
 ---
 
 ## 1. Created & Modified File Paths
 
-- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with deterministic manifest generation, cluster profiles (`surface`/`profile`), subagent offload contracts, direct slash command routing (`/^(\/[a-zA-Z0-9_-]+)/`), dormant catalog indexing across `.disabled` directories, on-demand hydration payload generation (`--hydrate`), on-demand staging lifecycle (`load`/`offload`/`unload` with `--all`), first-time project workspace setup (`init` with auto stack detection), fast new chat session pre-flight initialization (`session-start`), and encapsulated `.to_dict()` on `ScoredCandidate`.
-- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 21 unit tests structured across distinct test classes (`TestTextProcessing`, `TestDeterministicRouting`, `TestHarnessInstallation`, `TestManifestSyncAndShadowing`, `TestProfilesAndDormancy`, `TestOnDemandAndProjectInit`). Module-level imports strictly adhere to PEP 8.
-- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Comprehensive CLI reference documentation covering all 13 core and lifecycle commands.
-- [`HANDOFF.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/HANDOFF.md): Updated project handoff reference.
-- [`.scratch/on-demand-and-project-init/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/on-demand-and-project-init/): Wayfinder map and resolved tickets 01–04.
-- [`.scratch/skills-dormancy-router-v2/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/skills-dormancy-router-v2/): Wayfinder map and resolved tickets 01–04.
+- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with Execution Feedback Memory & Adaptive Stage B Calibration (`load_routing_history`, `save_routing_history`, `cmd_record`, `cmd_stats`, CLI subparsers `record`, `feedback`, `stats`, Laplace-smoothed empirical rate adjustment $+0.05$ bonus / $0.80\times$ penalty).
+- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 25 unit tests (+88 lines added for `test_record_execution_feedback_lifecycle` and `test_adaptive_scoring_with_history`).
+- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Updated CLI reference documentation covering `record`, `feedback --show`, and `stats` commands.
+- [`.gitignore`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.gitignore): Added `.routing-history.json` to prevent local execution counters from polluting git commits.
+- [`.scratch/execution-feedback-memory/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/execution-feedback-memory/): Wayfinder map and resolved tickets 01–03.
 
 ---
 
@@ -43,6 +42,7 @@ class SkillRecord:
     conflicts_with: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
+    signatures: list[str] = field(default_factory=list)
     intents: dict[str, list[str]] = field(default_factory=dict)
 
 @dataclass
@@ -59,9 +59,9 @@ class ScoredCandidate:
     def to_dict(self) -> dict: ...
 
 # Discovery & Hydration Engine
+def extract_metadata(skill_file: Path) -> dict
 def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> dict[str, SkillRecord]
 def resolve_skill_path(skill: SkillRecord, project_root: Path) -> Path
-def extract_metadata(skill_file: Path) -> dict
 def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = None) -> dict
 def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict
 def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> dict
@@ -74,44 +74,41 @@ def filter_skills_by_profile(registry: dict[str, SkillRecord], profile_name: str
 # On-Demand Lifecycle & Project Setup
 def load_loaded_meta(project_root: Path) -> tuple[Path, dict]
 def save_loaded_meta(meta_file: Path, data: dict) -> None
+def load_routing_history(project_root: Path | str) -> tuple[Path, dict]
+def save_routing_history(history_file: Path, data: dict) -> None
+def cmd_record(skill_id: str, outcome: str, project_root: Path | str, query: str | None = None) -> int
+def cmd_stats(project_root: Path) -> int
 def detect_project_stack(target_dir: Path) -> tuple[str, str]
+def run_interactive_wizard(target_dir: Path, detected_profile: str, stack_desc: str) -> tuple[str, list[str]]
 def cmd_load(skill_id: str, project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> int
 def cmd_offload(skill_id: str | None, project_root: Path, all_loaded: bool = False) -> int
-def cmd_init(target_dir: Path, profile: str | None = None) -> int
+def cmd_init(target_dir: Path, profile: str | None = None, wizard: bool = False, non_interactive: bool = False) -> int
 def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int
-
-# CLI Command Handlers
-def cmd_sync(project_root: Path) -> int
-def cmd_disable(skill_id: str, project_root: Path, yes: bool = False) -> int
-def cmd_enable(skill_id: str, project_root: Path) -> int
-def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False) -> int
-def cmd_benchmark(project_root: Path) -> int
-def cmd_profile(profile_name: str | None, project_root: Path) -> int
-def cmd_install_harness(harness_names: list[str], target_dir: Path) -> int
 ```
 
 ---
 
 ## 3. Active Errors & Stack Traces
 
-- **Zero Active Errors:** Clean test run (21/21 passing in 0.70s).
-- **Zero Drift:** Pushed cleanly to GitHub `origin/main` (`c440177`).
+- **Zero Active Errors:** 23/23 tests pass cleanly in 2.5s.
+- **Zero Drift:** Pushed cleanly to GitHub `origin/main` (`745bc9d`).
 
 ---
 
 ## 4. Architectural Decisions & Constraints
 
 1. **3-Tier Composite Pyramid:**
-   - **Tier 1 (Base Prompt):** Pinned static prefix contract (`<100` tokens) + deterministic lexicographical manifest sorting (`dirs.sort()`, `files.sort()`, `sort_keys=True`).
-   - **Tier 2 (Workspace Boundaries):** Local project scoping (`.agents/skills/`) strictly overrides global plugins; cluster profiles (`skills-router profile <name>`) gate inactive categories while preserving project skills.
+   - **Tier 1 (Base Prompt):** Pinned static prefix contract (`<100` tokens) + deterministic lexicographical manifest sorting.
+   - **Tier 2 (Workspace Boundaries):** Local project scoping (`.agents/skills/`) strictly overrides global plugins; cluster profiles gate inactive categories while preserving project skills.
    - **Tier 3 (Runtime Execution):** Progressive disclosure with on-demand hydration for dormant skills (`hydration` payload) + ephemeral subagent dispatch contracts for heavy verification skills (`subagent_offload`).
-2. **Global Plugins Dormancy Invariant:**
+2. **Body-Aware Signature Fingerprinting (Overcoming the Progressive Disclosure Trap):**
+   - Stripping tool bodies drops routing accuracy by 37–44% in empirical benchmarks.
+   - We extract markdown headings, bold key terms, and code spans from the first 80 lines into `signatures` ($\le 25$ tokens), scored with a dedicated 0.14 weight in Stage B ranking.
+   - Overlapping skills (e.g. `code-review`, `ponytail-review`, `chisle-review`) resolve accurately without loading full 500-line skill bodies upfront.
+3. **Global Plugins Dormancy Invariant:**
    - Global plugin directories (`~/.gemini/config/plugins/` and `~/.config/opencode/skills/`) transitioned to `.disabled`, dropping live prompt skills from **102 down to 41** (saving >60,000 prompt tokens/session).
-   - Only `mattpocock-skills` (39 skills), `skills-manager` (meta-skill router), and `rtk` remain active on disk.
-   - All 135 dormant skills remain indexed by `skills-router` and can be invoked/hydrated on demand.
-3. **On-Demand Staging Sovereignty:**
-   - Staging a dormant skill (`load`) places it directly into `<project_root>/.agents/skills/<skill_id>` and registers it in `.agents/skills/.loaded.json`.
-   - Offloading (`offload` or `offload --all`) sweeps staged folders without touching permanent skills or global catalogs.
+   - Only `mattpocock-skills`, `skills-manager`, and `rtk` remain active on disk.
+   - All 135 dormant skills remain indexed by `skills-router` and can be loaded/hydrated on demand.
 
 ---
 
@@ -125,13 +122,13 @@ def cmd_install_harness(harness_names: list[str], target_dir: Path) -> int
 - [x] Enable discovery and indexing of dormant skills in `.disabled` directories.
 - [x] Implement on-demand hydration payload generation (`--hydrate`).
 - [x] Implement on-demand skill load & offload lifecycle (`load`, `offload`, `unload`).
-- [x] Implement project auto-detection & initialization (`init`).
+- [x] Implement project auto-detection & initialization (`init`, `setup`).
 - [x] Implement fast new chat session initialization (`session-start`).
-- [x] Resolve all Wayfinder tickets in `.scratch/`.
-- [x] Run parallel two-axis `/code-review` (Standards + Spec).
-- [x] Resolve all code review findings (CLI flags, stack heuristics, test classes/imports, `README.md`).
-- [x] Commit cleanly to git (`c440177`).
-- [x] Push commits to remote GitHub (`origin/main`).
+- [x] Implement Body-Aware Signature Fingerprinting (Action 1) to solve the Progressive Disclosure Trap.
+- [x] Verify disambiguation of overlapping skills (`code-review`, `ponytail-review`, `chisle-review`).
+- [x] Implement Execution Feedback Memory (`.routing-history.json`) (Action 2).
+- [ ] Implement Multi-Tool Cluster Profiles Auto-Tuning (Action 3).
+- [ ] Standardize the Subagent Dispatch Contract (Action 4).
 
 ---
 

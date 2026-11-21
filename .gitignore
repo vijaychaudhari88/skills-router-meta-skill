@@ -25,3 +25,5 @@ Thumbs.db
 # Generated router output (optional local caches)
 skill-registry/
 SKILLS_REGISTRY.md
+.routing-history.json
+
