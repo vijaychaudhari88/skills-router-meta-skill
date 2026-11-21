@@ -75,7 +75,7 @@ PROFILES = {
     "core": {
         "description": "Minimal universal coding — planning, TDD, debugging, review, economy",
         "categories": ["1. Planning", "3. Debugging & Verification", "4. Token Economy", "6. Meta & Authoring"],
-        "include_skills": ["chisle", "ponytail", "implement", "handoff", "skills-manager"],
+        "include_skills": ["chisle", "ponytail", "implement", "handoff", "skills-manager", "wayfinder"],
     },
     "web": {
         "description": "Web & Frontend — Core plus Chrome DevTools, CSS/HTML, modern-web, hallmark",
@@ -174,6 +174,10 @@ CATEGORY_MAP = {
     # 1. Planning
     "brainstorming": "1. Planning",
     "writing-plans": "1. Planning",
+    "wayfinder": "1. Planning",
+    "to-spec": "1. Planning",
+    "to-tickets": "1. Planning",
+    "to-questionnaire": "1. Planning",
     "master-implementation-planning": "1. Planning",
     "master-prd-engineering": "1. Planning",
     "idea-to-blueprint": "1. Planning",
@@ -702,10 +706,11 @@ def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = No
 def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict:
     """Execute two-stage deterministic routing over the discovered skill registry."""
     raw_query = query.strip()
-    slash_match = re.match(r"^/([a-zA-Z0-9_-]+)(?:\s+(.*))?$", raw_query, re.DOTALL)
-    if slash_match:
-        cmd_name = slash_match.group(1).lower()
-        sub_prompt = (slash_match.group(2) or "").strip()
+    
+    # 1. Match leading or embedded explicit slash commands (e.g. "/wayfinder" or "... \n/wayfinder")
+    embedded_slash = re.search(r"(?:^|\s)/([a-zA-Z0-9_-]+)(?:\s+|$)", raw_query)
+    if embedded_slash:
+        cmd_name = embedded_slash.group(1).lower()
         
         # Check direct skill name match or alias or command
         matched_skill = None
@@ -739,9 +744,12 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 "evidence": f"slash command '/{cmd_name}' matched '{matched_skill.name}'",
                 "is_dormant": getattr(matched_skill, "is_dormant", False),
                 "validated": True,
-                "pipeline": build_pipeline_declaration([cand]),
+                "pipeline": build_pipeline_declaration([cand], query=query),
                 "debug": None
             }
+            dispatch = build_subagent_dispatch([cand], query=query)
+            if dispatch:
+                res["subagent_dispatch"] = dispatch
             if getattr(matched_skill, "is_dormant", False) or hydrate:
                 res["hydration"] = extract_hydration_payload(matched_skill, project_root)
             return res
@@ -1821,10 +1829,22 @@ def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int:
     return 0
 
 def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False, subagent_only: bool = False) -> int:
-    registry = discover_all_skills(project_root)
+    all_registry = discover_all_skills(project_root)
     profile = get_active_profile(project_root)
-    registry = filter_skills_by_profile(registry, profile)
+    registry = filter_skills_by_profile(all_registry, profile)
     result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root)
+    
+    # On-demand fallback: if active profile didn't match, check if query named an explicit slash command in full catalog
+    if result["decision"] == "no_route":
+        raw_q = query.strip()
+        slash_match = re.match(r"(?:^|\s+)/([a-zA-Z0-9_-]+)", raw_q)
+        if slash_match:
+            cmd = slash_match.group(1).lower()
+            if cmd in all_registry and cmd not in registry:
+                # Route on-demand from full catalog
+                result = route_query(f"/{cmd}", all_registry, debug=debug, hydrate=hydrate, project_root=project_root)
+                result["status"] = "on_demand_unfiltered_match"
+
     if subagent_only:
         dispatch = result.get("subagent_dispatch")
         if dispatch:
