@@ -657,6 +657,109 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
             self.assertEqual(r_calibrated["skill"], "proven-tool")
             self.assertIn("proven_track_record (4/4 ok)", r_calibrated["evidence"])
 
+    def test_detect_multi_stack_compound_profile(self):
+        """Test multi-stack detection for hybrid repositories (e.g. Web + Android)."""
+        import tempfile
+        from skills_router import detect_project_stack
+
+        with tempfile.TemporaryDirectory(prefix="multistack_test_") as tmp_dir:
+            proj = Path(tmp_dir)
+
+            # 1. Pure web
+            (proj / "package.json").write_text("{}", encoding="utf-8")
+            prof, desc = detect_project_stack(proj)
+            self.assertEqual(prof, "web")
+
+            # 2. Add Android markers -> becomes hybrid android+web
+            (proj / "build.gradle.kts").write_text("// gradle", encoding="utf-8")
+            prof, desc = detect_project_stack(proj)
+            self.assertEqual(prof, "android+web")
+            self.assertIn("Hybrid", desc)
+
+    def test_compound_profile_filtering(self):
+        """Test skill registry filtering using compound profiles (e.g. web+android)."""
+        from skills_router import SkillRecord, filter_skills_by_profile
+
+        mock_registry = {
+            "chrome-devtools": SkillRecord(
+                name="chrome-devtools",
+                description="DevTools",
+                source_path="fake/w",
+                scope="Global",
+                category="5. Domain & Infrastructure",
+                priority=50
+            ),
+            "android-cli": SkillRecord(
+                name="android-cli",
+                description="Android CLI",
+                source_path="fake/a",
+                scope="Global",
+                category="5. Domain & Infrastructure",
+                priority=50
+            ),
+            "gemini-api-dev": SkillRecord(
+                name="gemini-api-dev",
+                description="Gemini API",
+                source_path="fake/ai",
+                scope="Global",
+                category="5. Domain & Infrastructure",
+                priority=50
+            ),
+        }
+
+        # web profile only has chrome-devtools
+        f_web = filter_skills_by_profile(mock_registry, "web")
+        self.assertIn("chrome-devtools", f_web)
+        self.assertNotIn("android-cli", f_web)
+
+        # android profile only has android-cli
+        f_android = filter_skills_by_profile(mock_registry, "android")
+        self.assertNotIn("chrome-devtools", f_android)
+        self.assertIn("android-cli", f_android)
+
+        # compound web+android has both, but excludes gemini-api-dev
+        f_compound = filter_skills_by_profile(mock_registry, "web+android")
+        self.assertIn("chrome-devtools", f_compound)
+        self.assertIn("android-cli", f_compound)
+        self.assertNotIn("gemini-api-dev", f_compound)
+
+    def test_tune_profile_with_history_and_stack(self):
+        """Test cmd_tune profile auto-tuning based on project files and history."""
+        import tempfile
+        import io
+        from contextlib import redirect_stdout
+        from skills_router import cmd_tune, cmd_record, get_active_profile, set_active_profile
+
+        with tempfile.TemporaryDirectory(prefix="tune_test_") as tmp_dir:
+            proj = Path(tmp_dir)
+            (proj / "package.json").write_text("{}", encoding="utf-8")
+            set_active_profile(proj, "core")
+
+            # 1. cmd_tune without history recommends web based on package.json
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                res = cmd_tune(proj, apply=False)
+            self.assertEqual(res, 0)
+            self.assertIn("Recommended Profile    : 'web'", buf.getvalue())
+            self.assertEqual(get_active_profile(proj), "core")
+
+            # 2. cmd_tune with apply=True updates .skills-profile to web
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                res = cmd_tune(proj, apply=True)
+            self.assertEqual(res, 0)
+            self.assertEqual(get_active_profile(proj), "web")
+
+            # 3. Frequent use of an Android skill tunes profile to android+web
+            cmd_record("android-cli", "success", proj)
+            cmd_record("android-cli", "success", proj)
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                res = cmd_tune(proj, apply=True)
+            self.assertEqual(res, 0)
+            self.assertEqual(get_active_profile(proj), "android+web")
+
 
 if __name__ == "__main__":
     unittest.main()

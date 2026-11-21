@@ -116,8 +116,9 @@ python3 scripts/skills_router.py sync [--root .]
 # 2. Route an incoming task query (supports /<slash-command> syntax and --hydrate)
 python3 scripts/skills_router.py route "<query>" [--debug] [--hydrate]
 
-# 3. View or switch skill cluster profiles (all, core, web, android, ai)
-python3 scripts/skills_router.py profile [name]
+# 3. View, switch, or auto-tune skill cluster profiles (supports '+' compound profiles)
+python3 scripts/skills_router.py profile [name|auto] [--apply]
+python3 scripts/skills_router.py tune [--apply]
 python3 scripts/skills_router.py surface [name]
 
 # 4. On-demand skill loading into project context (.agents/skills/)

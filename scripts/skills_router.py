@@ -1107,33 +1107,76 @@ def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> di
 # ---------------------------------------------------------------------------
 # Profile Management & Staging Engine
 # ---------------------------------------------------------------------------
+def parse_compound_profile(profile_str: str) -> tuple[set[str] | None, set[str] | None, str]:
+    """Parse profile name or compound profile (e.g. 'web+android', 'core+ai').
+    
+    Returns (categories_set, include_skills_set, normalized_name).
+    If 'all' is included or requested, categories_set is None (meaning allow all).
+    """
+    clean_str = profile_str.strip().lower()
+    if clean_str in ("all", "*"):
+        return None, None, "all"
+    
+    sub_profiles = [p.strip() for p in clean_str.split("+") if p.strip()]
+    if not sub_profiles:
+        return None, None, "all"
+    
+    # Check that all components are valid known profiles
+    for sp in sub_profiles:
+        if sp not in PROFILES:
+            return set(), set(), clean_str  # invalid
+
+    if "all" in sub_profiles:
+        return None, None, "all"
+
+    merged_categories: set[str] = set()
+    merged_skills: set[str] = set()
+    
+    for sp in sub_profiles:
+        p_info = PROFILES[sp]
+        if p_info.get("categories"):
+            merged_categories.update(p_info["categories"])
+        if p_info.get("include_skills"):
+            merged_skills.update(p_info["include_skills"])
+
+    norm_name = "+".join(sorted(set(sub_profiles)))
+    return merged_categories, merged_skills, norm_name
+
+def is_valid_profile_spec(profile_str: str) -> bool:
+    """Check if profile name or '+'-separated compound profile is valid."""
+    clean = profile_str.strip().lower()
+    if clean in ("all", "reset", "clear", "auto"):
+        return True
+    parts = [p.strip() for p in clean.split("+") if p.strip()]
+    return bool(parts) and all(p in PROFILES for p in parts)
+
 def get_active_profile(project_root: Path) -> str:
     prof_file = project_root / ".skills-profile"
     if prof_file.exists():
         val = prof_file.read_text(encoding="utf-8").strip().lower()
-        if val in PROFILES:
+        if is_valid_profile_spec(val):
             return val
     return "all"
 
 def set_active_profile(project_root: Path, profile_name: str) -> bool:
     prof = profile_name.strip().lower()
-    if prof not in PROFILES:
+    if not is_valid_profile_spec(prof):
         return False
     prof_file = project_root / ".skills-profile"
-    if prof == "all":
+    if prof in ("all", "reset", "clear"):
         if prof_file.exists():
             prof_file.unlink()
     else:
-        prof_file.write_text(prof, encoding="utf-8")
+        # Normalize compound ordering (e.g. android+web -> android+web)
+        parts = sorted(set(p.strip() for p in prof.split("+") if p.strip()))
+        norm_val = "+".join(parts) if parts else "all"
+        prof_file.write_text(norm_val, encoding="utf-8")
     return True
 
 def filter_skills_by_profile(registry: dict[str, SkillRecord], profile_name: str) -> dict[str, SkillRecord]:
-    prof = PROFILES.get(profile_name)
-    if not prof or prof["categories"] is None:
+    allowed_cats, allowed_skills, norm_name = parse_compound_profile(profile_name)
+    if allowed_cats is None:
         return registry
-    
-    allowed_cats = set(prof["categories"])
-    allowed_skills = set(prof.get("include_skills") or [])
 
     filtered = {}
     for name, s in registry.items():
@@ -1143,7 +1186,57 @@ def filter_skills_by_profile(registry: dict[str, SkillRecord], profile_name: str
             filtered[name] = s
     return filtered
 
-def cmd_profile(profile_name: str | None, project_root: Path) -> int:
+def cmd_tune(project_root: Path, apply: bool = False) -> int:
+    """Auto-tune active skill profile based on detected stacks and execution history."""
+    suggested_profile, stack_desc = detect_project_stack(project_root)
+    current_profile = get_active_profile(project_root)
+
+    # Check execution feedback history for frequently used skills
+    _, history_data = load_routing_history(project_root)
+    skills_map = history_data.get("skills", {})
+    frequent_skills = [
+        name for name, stat in skills_map.items()
+        if (stat.get("success", 0) + stat.get("failure", 0)) >= 2
+    ]
+
+    # Check if frequent skills suggest additional profiles
+    extra_profiles = set()
+    for s_name in frequent_skills:
+        for p_name, p_data in PROFILES.items():
+            if p_name in ("all", "core"):
+                continue
+            if s_name in (p_data.get("include_skills") or []):
+                extra_profiles.add(p_name)
+
+    recommended_profile = suggested_profile
+    if extra_profiles:
+        combo_parts = set(suggested_profile.split("+"))
+        combo_parts.update(extra_profiles)
+        combo_parts.discard("core")
+        combo_parts.discard("all")
+        if combo_parts:
+            recommended_profile = "+".join(sorted(combo_parts))
+
+    print("\n🔍 Profile Auto-Tuning Analysis:")
+    print(f"  • Project Directory      : {project_root}")
+    print(f"  • Detected Tech Stack    : {stack_desc}")
+    print(f"  • Active Profile         : '{current_profile}'")
+    print(f"  • Frequently Used Skills : {', '.join(frequent_skills) if frequent_skills else 'None recorded yet'}")
+    print(f"  • Recommended Profile    : '{recommended_profile}'")
+
+    if current_profile == recommended_profile:
+        print(f"\n✔ Current profile is already optimal ('{current_profile}'). No changes needed.")
+        return 0
+
+    if apply:
+        set_active_profile(project_root, recommended_profile)
+        print(f"\n✔ Auto-applied recommended profile: '{recommended_profile}'.")
+        cmd_sync(project_root)
+    else:
+        print(f"\nℹ Run 'skills-router tune --apply' or 'skills-router profile {recommended_profile}' to activate.")
+    return 0
+
+def cmd_profile(profile_name: str | None, project_root: Path, apply: bool = False) -> int:
     active = get_active_profile(project_root)
     if not profile_name or profile_name == "list":
         print(f"Active Profile: '{active}'\n")
@@ -1151,17 +1244,21 @@ def cmd_profile(profile_name: str | None, project_root: Path) -> int:
         for p, info in PROFILES.items():
             marker = "* " if p == active else "  "
             print(f" {marker}{p:10} - {info['description']}")
+        print("\nCompound profiles (e.g. 'web+android', 'web+ai') can also be specified with '+'.")
         return 0
 
     p_norm = profile_name.strip().lower()
+    if p_norm == "auto":
+        return cmd_tune(project_root, apply=apply)
+
     if p_norm in ("reset", "clear", "all"):
         set_active_profile(project_root, "all")
         print("✔ Profile reset to 'all' (all discovered skills active).")
         cmd_sync(project_root)
         return 0
 
-    if p_norm not in PROFILES:
-        print(f"✘ Error: Unknown profile '{profile_name}'. Available: {', '.join(PROFILES.keys())}", file=sys.stderr)
+    if not is_valid_profile_spec(p_norm):
+        print(f"✘ Error: Unknown profile '{profile_name}'. Available: {', '.join(PROFILES.keys())} or '+'-joined compounds.", file=sys.stderr)
         return 1
 
     set_active_profile(project_root, p_norm)
@@ -1449,7 +1546,12 @@ def cmd_offload(skill_id: str | None, project_root: Path, all_loaded: bool = Fal
     return 0
 
 def detect_project_stack(target_dir: Path) -> tuple[str, str]:
-    """Auto-detect project tech stack and return (profile_name, stack_description)."""
+    """Auto-detect project tech stack and return (profile_name, stack_description).
+    
+    Supports multi-stack detection (e.g. web+android, web+core, android+ai).
+    """
+    detected_stacks: list[tuple[str, str]] = []
+
     # Android stack detection
     if (
         (target_dir / "android").exists()
@@ -1459,8 +1561,8 @@ def detect_project_stack(target_dir: Path) -> tuple[str, str]:
         or (target_dir / "settings.gradle.kts").exists()
         or (target_dir / "app" / "src" / "main" / "AndroidManifest.xml").exists()
     ):
-        return "android", "Android (Gradle/Kotlin/Compose)"
-        
+        detected_stacks.append(("android", "Android (Gradle/Kotlin/Compose)"))
+
     # Web / Frontend stack detection
     if (
         (target_dir / "package.json").exists()
@@ -1470,8 +1572,8 @@ def detect_project_stack(target_dir: Path) -> tuple[str, str]:
         or (target_dir / "vite.config.ts").exists()
         or (target_dir / "vite.config.js").exists()
     ):
-        return "web", "Web / Frontend (JavaScript/TypeScript)"
-        
+        detected_stacks.append(("web", "Web / Frontend (JavaScript/TypeScript)"))
+
     # Python / Backend stack detection
     if (
         (target_dir / "requirements.txt").exists()
@@ -1479,9 +1581,31 @@ def detect_project_stack(target_dir: Path) -> tuple[str, str]:
         or (target_dir / "setup.py").exists()
         or (target_dir / "Pipfile").exists()
     ):
-        return "core", "Python (Backend/CLI)"
-        
-    return "core", "Generalist Codebase"
+        detected_stacks.append(("core", "Python (Backend/CLI)"))
+
+    # AI / LLM pipeline detection
+    if (
+        (target_dir / ".planning" / "research").exists()
+        or (target_dir / "prompts").exists()
+        or any((target_dir).glob("*gemini*"))
+        or any((target_dir).glob("*prompt*"))
+    ):
+        detected_stacks.append(("ai", "AI / LLM Integration"))
+
+    if not detected_stacks:
+        return "core", "Generalist Codebase"
+
+    if len(detected_stacks) == 1:
+        return detected_stacks[0][0], detected_stacks[0][1]
+
+    # Multiple stacks detected: compound profile
+    # If core is accompanied by web or android or ai, we don't need 'core+' since web/android/ai include core categories
+    prof_keys = [s[0] for s in detected_stacks]
+    non_core = [k for k in prof_keys if k != "core"]
+    final_keys = non_core if non_core else ["core"]
+    final_profile = "+".join(sorted(set(final_keys)))
+    descriptions = " + ".join(s[1] for s in detected_stacks)
+    return final_profile, f"Hybrid: {descriptions}"
 
 def run_interactive_wizard(target_dir: Path, detected_profile: str, stack_desc: str) -> tuple[str, list[str]]:
     """Small, friendly interactive setup wizard for first-time project setup."""
@@ -1498,6 +1622,10 @@ def run_interactive_wizard(target_dir: Path, detected_profile: str, stack_desc: 
         ("ai", "ai (AI frameworks, Gemini, prompt engineering)"),
         ("all", "all (Full catalog — all discovered skills)"),
     ]
+
+    # If detected profile is a compound profile not in standard list, add it at the top
+    if detected_profile not in [p[0] for p in profile_choices]:
+        profile_choices.insert(0, (detected_profile, f"{detected_profile} (Auto-detected hybrid multi-stack profile)"))
 
     # Reorder so detected profile is option 1
     ordered_profiles = [p for p in profile_choices if p[0] == detected_profile] + [
@@ -1516,7 +1644,7 @@ def run_interactive_wizard(target_dir: Path, detected_profile: str, stack_desc: 
             pick_idx = int(user_choice) - 1
             if 0 <= pick_idx < len(ordered_profiles):
                 chosen_profile = ordered_profiles[pick_idx][0]
-        elif user_choice in PROFILES:
+        elif is_valid_profile_spec(user_choice):
             chosen_profile = user_choice
     except (EOFError, KeyboardInterrupt):
         print("\nUsing default profile.")
@@ -1824,13 +1952,20 @@ def main():
     inst_p.add_argument("--target", default=".", help="Target project directory")
 
     # profile
-    prof_p = subparsers.add_parser("profile", help="View or switch skill cluster profiles")
-    prof_p.add_argument("name", nargs="?", default=None, help="Profile name to activate (core, web, android, ai, all)")
+    prof_p = subparsers.add_parser("profile", help="View, switch, or auto-tune skill cluster profiles")
+    prof_p.add_argument("name", nargs="?", default=None, help="Profile name to activate (core, web, android, ai, all, auto, or compound e.g. web+android)")
+    prof_p.add_argument("--apply", "-a", action="store_true", help="Apply auto-tuned profile recommendations immediately")
     prof_p.add_argument("--root", default=".", help="Project root directory")
+
+    # tune (dedicated command for profile auto-tuning)
+    tune_p = subparsers.add_parser("tune", help="Auto-tune skill profile based on stack detection and execution feedback")
+    tune_p.add_argument("--apply", "-a", action="store_true", help="Apply auto-tuned profile recommendations immediately")
+    tune_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
 
     # surface (alias for profile)
     surf_p = subparsers.add_parser("surface", help="Alias for profile: surface specific skill cluster")
-    surf_p.add_argument("name", nargs="?", default=None, help="Profile name to activate (core, web, android, ai, all)")
+    surf_p.add_argument("name", nargs="?", default=None, help="Profile name to activate (core, web, android, ai, all, auto, or compound)")
+    surf_p.add_argument("--apply", "-a", action="store_true", help="Apply auto-tuned profile recommendations immediately")
     surf_p.add_argument("--root", default=".", help="Project root directory")
 
     # load
@@ -1894,7 +2029,9 @@ def main():
     elif args.command == "benchmark":
         sys.exit(cmd_benchmark(root))
     elif args.command == "profile" or args.command == "surface":
-        sys.exit(cmd_profile(args.name, root))
+        sys.exit(cmd_profile(args.name, root, apply=getattr(args, "apply", False)))
+    elif args.command == "tune":
+        sys.exit(cmd_tune(root, apply=getattr(args, "apply", False)))
     elif args.command == "load":
         sys.exit(cmd_load(args.skill_id, root))
     elif args.command in ("offload", "unload"):

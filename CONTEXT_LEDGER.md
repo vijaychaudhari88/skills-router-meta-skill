@@ -1,19 +1,18 @@
 # Context Ledger: Skills Router Meta-Skill & Token Optimization
 
-**Timestamp:** 2026-11-21T10:27:00+05:30  
+**Timestamp:** 2026-11-21T10:38:00+05:30  
 **Workspace Root:** `/data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill`  
-**Current Branch:** `main` (pushed to origin/main at `e9eca5a`)  
-**Status:** All 25 Unit Tests PASS (5.0s) | Benchmark 4/4 PASS (~41ms / ~10.3ms/query)  
+**Current Branch:** `main` (Action 3 verified, pending commit)  
+**Status:** All 28 Unit Tests PASS (2.9s) | Benchmark 4/4 PASS (~89ms / ~22.4ms/query)  
 
 ---
 
 ## 1. Created & Modified File Paths
 
-- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with Execution Feedback Memory & Adaptive Stage B Calibration (`load_routing_history`, `save_routing_history`, `cmd_record`, `cmd_stats`, CLI subparsers `record`, `feedback`, `stats`, Laplace-smoothed empirical rate adjustment $+0.05$ bonus / $0.80\times$ penalty).
-- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 25 unit tests (+88 lines added for `test_record_execution_feedback_lifecycle` and `test_adaptive_scoring_with_history`).
-- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Updated CLI reference documentation covering `record`, `feedback --show`, and `stats` commands.
-- [`.gitignore`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.gitignore): Added `.routing-history.json` to prevent local execution counters from polluting git commits.
-- [`.scratch/execution-feedback-memory/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/execution-feedback-memory/): Wayfinder map and resolved tickets 01–03.
+- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with Multi-Tool Cluster Profiles Auto-Tuning (`parse_compound_profile`, `is_valid_profile_spec`, multi-stack `detect_project_stack`, `cmd_tune`, CLI `tune` subcommand, and `profile auto [--apply]`).
+- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 28 unit tests (+103 lines added for `test_detect_multi_stack_compound_profile`, `test_compound_profile_filtering`, and `test_tune_profile_with_history_and_stack`).
+- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Updated CLI reference documentation covering `tune` and `profile [name|auto] [--apply]`.
+- [`.scratch/cluster-profiles-auto-tuning/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/cluster-profiles-auto-tuning/): Wayfinder map and resolved tickets 01–03.
 
 ---
 
@@ -66,10 +65,13 @@ def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = No
 def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict
 def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> dict
 
-# Profile Staging Engine
+# Profile Staging & Auto-Tuning Engine
+def parse_compound_profile(profile_str: str) -> tuple[set[str] | None, set[str] | None, str]
+def is_valid_profile_spec(profile_str: str) -> bool
 def get_active_profile(project_root: Path) -> str
 def set_active_profile(project_root: Path, profile_name: str) -> bool
 def filter_skills_by_profile(registry: dict[str, SkillRecord], profile_name: str) -> dict[str, SkillRecord]
+def cmd_tune(project_root: Path, apply: bool = False) -> int
 
 # On-Demand Lifecycle & Project Setup
 def load_loaded_meta(project_root: Path) -> tuple[Path, dict]
@@ -127,7 +129,7 @@ def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int
 - [x] Implement Body-Aware Signature Fingerprinting (Action 1) to solve the Progressive Disclosure Trap.
 - [x] Verify disambiguation of overlapping skills (`code-review`, `ponytail-review`, `chisle-review`).
 - [x] Implement Execution Feedback Memory (`.routing-history.json`) (Action 2).
-- [ ] Implement Multi-Tool Cluster Profiles Auto-Tuning (Action 3).
+- [x] Implement Multi-Tool Cluster Profiles Auto-Tuning (Action 3).
 - [ ] Standardize the Subagent Dispatch Contract (Action 4).
 
 ---
