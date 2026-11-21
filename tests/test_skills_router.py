@@ -760,6 +760,82 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
             self.assertEqual(res, 0)
             self.assertEqual(get_active_profile(proj), "android+web")
 
+    def test_subagent_dispatch_payload_for_heavy_skills(self):
+        """Test standardized subagent dispatch payload generation for heavy skills."""
+        from skills_router import SkillRecord, route_query
+
+        mock_registry = {
+            "chrome-devtools": SkillRecord(
+                name="chrome-devtools",
+                description="DevTools inspection tool",
+                source_path="fake/cdp",
+                scope="Global",
+                category="5. Domain & Infrastructure",
+                priority=50,
+                objects=["browser", "viewport", "console"],
+                actions=["audit", "inspect"],
+                domains=["browser"],
+                intents={"audit": ["audit mobile viewport"]}
+            )
+        }
+
+        # Query routing to chrome-devtools should include structured subagent_dispatch
+        res = route_query("audit mobile viewport and inspect console errors", mock_registry)
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["skill"], "chrome-devtools")
+        self.assertIn("subagent_dispatch", res)
+
+        dispatch = res["subagent_dispatch"]
+        self.assertTrue(dispatch["required"])
+        self.assertEqual(dispatch["primary_subagent"]["role"], "Browser Automation QA")
+        self.assertEqual(dispatch["primary_subagent"]["typeName"], "research")
+        self.assertEqual(dispatch["primary_subagent"]["model"], "flash")
+        self.assertEqual(dispatch["primary_subagent"]["isolation"], "ephemeral_subagent")
+        self.assertIn("No raw HTML/CDP dumps", dispatch["primary_subagent"]["deliverable_contract"])
+
+    def test_subagent_dispatch_not_required_for_standard_skills(self):
+        """Test that standard coding skills do not enforce subagent dispatch."""
+        from skills_router import SkillRecord, route_query
+
+        mock_registry = {
+            "tdd": SkillRecord(
+                name="test-driven-development",
+                description="Unit testing",
+                source_path="fake/tdd",
+                scope="Global",
+                category="3. Debugging & Verification",
+                priority=50,
+                objects=["test", "unit"],
+                actions=["run", "write"],
+                domains=["testing"],
+                intents={"run": ["run unit tests"]}
+            )
+        }
+
+        res = route_query("run unit tests for auth module", mock_registry)
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["skill"], "test-driven-development")
+        self.assertNotIn("subagent_dispatch", res)
+
+    def test_route_cli_subagent_flag(self):
+        """Test cmd_route with subagent_only=True flag."""
+        import tempfile
+        import io
+        import json
+        from contextlib import redirect_stdout
+        from skills_router import cmd_route
+
+        with tempfile.TemporaryDirectory(prefix="cli_subagent_") as tmp_dir:
+            proj = Path(tmp_dir)
+
+            # Standard task -> required=False
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                res = cmd_route("write unit test", proj, subagent_only=True)
+            self.assertEqual(res, 0)
+            data = json.loads(buf.getvalue())
+            self.assertFalse(data.get("required"))
+
 
 if __name__ == "__main__":
     unittest.main()

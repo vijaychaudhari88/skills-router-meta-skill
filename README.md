@@ -113,8 +113,8 @@ The router CLI provides a comprehensive command suite for deterministic routing,
 # 1. Sync skills and compile SKILLS_REGISTRY.md and JSON manifest
 python3 scripts/skills_router.py sync [--root .]
 
-# 2. Route an incoming task query (supports /<slash-command> syntax and --hydrate)
-python3 scripts/skills_router.py route "<query>" [--debug] [--hydrate]
+# 2. Route an incoming task query (supports /<slash-command>, --hydrate, and --subagent)
+python3 scripts/skills_router.py route "<query>" [--debug] [--hydrate] [--subagent]
 
 # 3. View, switch, or auto-tune skill cluster profiles (supports '+' compound profiles)
 python3 scripts/skills_router.py profile [name|auto] [--apply]

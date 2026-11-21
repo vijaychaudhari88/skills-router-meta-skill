@@ -1,18 +1,18 @@
 # Context Ledger: Skills Router Meta-Skill & Token Optimization
 
-**Timestamp:** 2026-11-21T10:42:00+05:30  
+**Timestamp:** 2026-11-21T10:50:00+05:30  
 **Workspace Root:** `/data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill`  
-**Current Branch:** `main` (pushed to origin/main at `aff4c7e`)  
-**Status:** All 28 Unit Tests PASS (2.9s) | Benchmark 4/4 PASS (~89ms / ~22.4ms/query)  
+**Current Branch:** `main` (Action 4 verified, pending commit)  
+**Status:** All 31 Unit Tests PASS (3.2s) | Benchmark 4/4 PASS (~93ms / ~23.5ms/query)  
 
 ---
 
 ## 1. Created & Modified File Paths
 
-- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with Multi-Tool Cluster Profiles Auto-Tuning (`parse_compound_profile`, `is_valid_profile_spec`, multi-stack `detect_project_stack`, `cmd_tune`, CLI `tune` subcommand, and `profile auto [--apply]`).
-- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 28 unit tests (+103 lines added for `test_detect_multi_stack_compound_profile`, `test_compound_profile_filtering`, and `test_tune_profile_with_history_and_stack`).
-- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Updated CLI reference documentation covering `tune` and `profile [name|auto] [--apply]`.
-- [`.scratch/cluster-profiles-auto-tuning/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/cluster-profiles-auto-tuning/): Wayfinder map and resolved tickets 01–03.
+- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with Subagent Dispatch Contract Standardization (`HEAVY_SUBAGENT_SKILLS` typed metadata, `build_subagent_dispatch`, injected `subagent_dispatch` payload in `route_query`, and CLI `--subagent` inspection flag).
+- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 31 unit tests (+76 lines added for `test_subagent_dispatch_payload_for_heavy_skills`, `test_subagent_dispatch_not_required_for_standard_skills`, and `test_route_cli_subagent_flag`).
+- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Updated CLI reference documentation covering `route "<query>" [--subagent]`.
+- [`.scratch/subagent-dispatch-contract/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/subagent-dispatch-contract/): Wayfinder map and resolved tickets 01–03.
 
 ---
 
@@ -62,8 +62,9 @@ def extract_metadata(skill_file: Path) -> dict
 def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> dict[str, SkillRecord]
 def resolve_skill_path(skill: SkillRecord, project_root: Path) -> Path
 def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = None) -> dict
+def build_subagent_dispatch(selected_candidates: list[ScoredCandidate], query: str = "") -> dict | None
+def build_pipeline_declaration(selected_candidates: list[ScoredCandidate], query: str = "") -> dict
 def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict
-def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> dict
 
 # Profile Staging & Auto-Tuning Engine
 def parse_compound_profile(profile_str: str) -> tuple[set[str] | None, set[str] | None, str]
@@ -86,6 +87,7 @@ def cmd_load(skill_id: str, project_root: Path, custom_search_dirs: list[tuple[i
 def cmd_offload(skill_id: str | None, project_root: Path, all_loaded: bool = False) -> int
 def cmd_init(target_dir: Path, profile: str | None = None, wizard: bool = False, non_interactive: bool = False) -> int
 def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int
+def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False, subagent_only: bool = False) -> int
 ```
 
 ---
@@ -130,7 +132,7 @@ def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int
 - [x] Verify disambiguation of overlapping skills (`code-review`, `ponytail-review`, `chisle-review`).
 - [x] Implement Execution Feedback Memory (`.routing-history.json`) (Action 2).
 - [x] Implement Multi-Tool Cluster Profiles Auto-Tuning (Action 3).
-- [ ] Standardize the Subagent Dispatch Contract (Action 4).
+- [x] Standardize the Subagent Dispatch Contract (Action 4).
 
 ---
 

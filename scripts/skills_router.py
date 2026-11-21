@@ -106,13 +106,62 @@ PROFILES = {
 }
 
 HEAVY_SUBAGENT_SKILLS = {
-    "chrome-devtools": ("Browser Automation QA", "Prevents high-volume CDP DOM & console log token pollution in root orchestrator"),
-    "a11y-debugging": ("Accessibility Auditor", "Isolates WCAG tree inspection and color contrast audits"),
-    "memory-leak-debugging": ("Performance Profiler", "Isolates heap snapshot analysis and leak traces"),
-    "debug-optimize-lcp": ("CWV Optimizer", "Isolates network waterfall and paint timing diagnostics"),
-    "evaluation": ("Evaluation Specialist", "Runs automated test harnesses and LLM-as-judge scoring in clean context"),
-    "advanced-evaluation": ("Evaluation Specialist", "Runs pairwise and arena evaluations in isolated subagent"),
-    "code-review": ("Code Reviewer", "Executes 2-axis Standards/Spec review without polluting main chat history"),
+    "chrome-devtools": {
+        "role": "Browser Automation QA",
+        "typeName": "research",
+        "model": "flash",
+        "isolation": "ephemeral_subagent",
+        "reason": "Prevents high-volume CDP DOM & console log token pollution in root orchestrator",
+        "deliverable_contract": "Structured findings report with element UIDs, network status, or reproduction steps (<= 30 lines max). No raw HTML/CDP dumps."
+    },
+    "a11y-debugging": {
+        "role": "Accessibility Auditor",
+        "typeName": "research",
+        "model": "flash",
+        "isolation": "ephemeral_subagent",
+        "reason": "Isolates WCAG tree inspection and color contrast audits",
+        "deliverable_contract": "Scored WCAG compliance summary with specific failing selector nodes and remediation advice."
+    },
+    "memory-leak-debugging": {
+        "role": "Performance Profiler",
+        "typeName": "research",
+        "model": "flash",
+        "isolation": "ephemeral_subagent",
+        "reason": "Isolates heap snapshot analysis and leak traces",
+        "deliverable_contract": "Summary of leaking retainer paths and suspected detached DOM tree nodes."
+    },
+    "debug-optimize-lcp": {
+        "role": "CWV Optimizer",
+        "typeName": "research",
+        "model": "flash",
+        "isolation": "ephemeral_subagent",
+        "reason": "Isolates network waterfall and paint timing diagnostics",
+        "deliverable_contract": "Waterfall timing breakdown (TTFB, FCP, LCP element) and top 3 bottlenecks."
+    },
+    "evaluation": {
+        "role": "Evaluation Specialist",
+        "typeName": "self",
+        "model": "inherit",
+        "isolation": "ephemeral_subagent",
+        "reason": "Runs automated test harnesses and LLM-as-judge scoring in clean context",
+        "deliverable_contract": "Aggregate score card, pass/fail counts, and rubric criteria evaluations."
+    },
+    "advanced-evaluation": {
+        "role": "Evaluation Specialist",
+        "typeName": "self",
+        "model": "inherit",
+        "isolation": "ephemeral_subagent",
+        "reason": "Runs pairwise and arena evaluations in isolated subagent",
+        "deliverable_contract": "Pairwise win-rates, ELO delta summary, and head-to-head justifications."
+    },
+    "code-review": {
+        "role": "Code Reviewer",
+        "typeName": "self",
+        "model": "inherit",
+        "isolation": "ephemeral_subagent",
+        "reason": "Executes 2-axis Standards/Spec review without polluting main chat history",
+        "deliverable_contract": "Two-column Standards/Spec review with severity-classified findings (P0/P1/P2)."
+    },
 }
 
 STOPWORDS = {
@@ -983,7 +1032,7 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     if len(multi_plan) >= 2 and has_conjunction:
         skill_names = [m.skill.name for m in multi_plan]
         summary = generate_skills_summary(multi_plan)
-        return {
+        res = {
             "decision": "route",
             "status": "multi_skill_plan",
             "skill": skill_names[0],
@@ -994,9 +1043,13 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             "confidence": round(winner.confidence, 3),
             "evidence": "; ".join(winner.evidence),
             "validated": True,
-            "pipeline": build_pipeline_declaration(multi_plan),
+            "pipeline": build_pipeline_declaration(multi_plan, query=query),
             "debug": [format_cand(c) for c in candidates[:5]] if debug else None
         }
+        dispatch = build_subagent_dispatch(multi_plan, query=query)
+        if dispatch:
+            res["subagent_dispatch"] = dispatch
+        return res
 
     # Single ROUTE
     if winner.confidence >= CONFIG["route_floor"]:
@@ -1017,9 +1070,12 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 "alternative": second.skill.name if second else None,
                 "is_dormant": is_dormant,
                 "validated": bool(cmd),
-                "pipeline": build_pipeline_declaration([winner]),
+                "pipeline": build_pipeline_declaration([winner], query=query),
                 "debug": [format_cand(c) for c in candidates[:5]] if debug else None
             }
+            dispatch = build_subagent_dispatch([winner], query=query)
+            if dispatch:
+                res["subagent_dispatch"] = dispatch
             if is_dormant or hydrate:
                 res["hydration"] = extract_hydration_payload(winner.skill, project_root)
             return res
@@ -1059,7 +1115,39 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         "debug": [format_cand(c) for c in candidates[:5]] if debug else None
     }
 
-def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> dict:
+def build_subagent_dispatch(selected_candidates: list[ScoredCandidate], query: str = "") -> dict | None:
+    """Standardize machine-readable subagent dispatch contract for heavy/isolated tasks."""
+    heavy_matches = []
+    for c in selected_candidates:
+        name = c.skill.name
+        if name in HEAVY_SUBAGENT_SKILLS:
+            meta = HEAVY_SUBAGENT_SKILLS[name]
+            heavy_matches.append({
+                "skill": name,
+                "role": meta["role"],
+                "typeName": meta["typeName"],
+                "model": meta["model"],
+                "isolation": meta["isolation"],
+                "reason": meta["reason"],
+                "prompt_template": (
+                    f"Perform delegated '{name}' execution for task: \"{query}\". "
+                    f"Adhere strictly to: {meta['deliverable_contract']}"
+                ),
+                "deliverable_contract": meta["deliverable_contract"]
+            })
+
+    if not heavy_matches:
+        return None
+
+    primary = heavy_matches[0]
+    return {
+        "required": True,
+        "primary_subagent": primary,
+        "dispatches": heavy_matches,
+        "isolation_rationale": "Token conservation & context isolation: delegate high-volume tool execution to ephemeral subagent.",
+    }
+
+def build_pipeline_declaration(selected_candidates: list[ScoredCandidate], query: str = "") -> dict:
     """Format canonical 4-phase execution pipeline."""
     guardrails = ["using-superpowers", "agent-memory-discipline", "tokenleak"]
     pre_exec = []
@@ -1080,12 +1168,12 @@ def build_pipeline_declaration(selected_candidates: list[ScoredCandidate]) -> di
             pre_exec.append(name)
 
         if name in HEAVY_SUBAGENT_SKILLS:
-            role, reason = HEAVY_SUBAGENT_SKILLS[name]
+            meta = HEAVY_SUBAGENT_SKILLS[name]
             subagent_offload.append({
                 "skill": name,
-                "recommended_role": role,
-                "isolation": "ephemeral_subagent",
-                "reason": reason
+                "recommended_role": meta["role"],
+                "isolation": meta["isolation"],
+                "reason": meta["reason"]
             })
 
     if not pre_exec:
@@ -1732,11 +1820,18 @@ def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int:
     print(receipt)
     return 0
 
-def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False) -> int:
+def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False, subagent_only: bool = False) -> int:
     registry = discover_all_skills(project_root)
     profile = get_active_profile(project_root)
     registry = filter_skills_by_profile(registry, profile)
     result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root)
+    if subagent_only:
+        dispatch = result.get("subagent_dispatch")
+        if dispatch:
+            print(json.dumps(dispatch, indent=2))
+        else:
+            print(json.dumps({"required": False, "message": "No subagent offload required for this task."}, indent=2))
+        return 0
     print(json.dumps(result, indent=2))
     return 0
 
@@ -1926,6 +2021,7 @@ def main():
     route_p.add_argument("--root", default=".", help="Project root directory")
     route_p.add_argument("--debug", action="store_true", help="Print debug score breakdown")
     route_p.add_argument("--hydrate", action="store_true", help="Include full on-demand skill instructions in output")
+    route_p.add_argument("--subagent", action="store_true", help="Output only the subagent dispatch contract payload")
 
     # benchmark
     bench_p = subparsers.add_parser("benchmark", help="Run benchmark suite")
@@ -2025,7 +2121,7 @@ def main():
     if args.command == "sync":
         sys.exit(cmd_sync(root))
     elif args.command == "route":
-        sys.exit(cmd_route(args.query, root, debug=args.debug, hydrate=args.hydrate))
+        sys.exit(cmd_route(args.query, root, debug=args.debug, hydrate=args.hydrate, subagent_only=args.subagent))
     elif args.command == "benchmark":
         sys.exit(cmd_benchmark(root))
     elif args.command == "profile" or args.command == "surface":
