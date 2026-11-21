@@ -477,7 +477,7 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
     def test_session_start_preflight_and_cleanup(self):
         proj = self.test_dir / "session_test_proj"
         proj.mkdir(parents=True)
-        cmd_init(proj)
+        cmd_init(proj, non_interactive=True)
 
         # Add a fake loaded skill
         fake_loaded = proj / ".agents" / "skills" / "temp-tool"
@@ -492,6 +492,23 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
         self.assertFalse(fake_loaded.exists())
         meta_after = json.loads(meta_file.read_text(encoding="utf-8"))
         self.assertEqual(meta_after.get("loaded", {}), {})
+
+    def test_interactive_wizard_with_mocked_inputs(self):
+        from unittest.mock import patch
+
+        wizard_proj = self.test_dir / "wizard_custom_proj"
+        wizard_proj.mkdir(parents=True)
+
+        # Simulate user selecting option '2' (web or custom profile) and '2' (claude+gemini harnesses)
+        with patch("builtins.input", side_effect=["2", "2"]):
+            ret = cmd_init(wizard_proj, wizard=True)
+            self.assertEqual(ret, 0)
+
+        # Confirm harness files created
+        self.assertTrue((wizard_proj / "CLAUDE.md").exists())
+        self.assertTrue((wizard_proj / "AGENTS.md").exists())
+        # Cursor should not be created since choice was 2 (claude + gemini only)
+        self.assertFalse((wizard_proj / ".cursor" / "rules" / "skills-router.mdc").exists())
 
 
 if __name__ == "__main__":

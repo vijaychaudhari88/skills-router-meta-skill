@@ -1321,20 +1321,86 @@ def detect_project_stack(target_dir: Path) -> tuple[str, str]:
         
     return "core", "Generalist Codebase"
 
-def cmd_init(target_dir: Path, profile: str | None = None) -> int:
+def run_interactive_wizard(target_dir: Path, detected_profile: str, stack_desc: str) -> tuple[str, list[str]]:
+    """Small, friendly interactive setup wizard for first-time project setup."""
+    print("\n" + "╔" + "═" * 58 + "╗")
+    print("║     🧙 Skills Router Interactive Setup Wizard            ║")
+    print("╚" + "═" * 58 + "╝")
+    print(f"\n📂 Project Directory : {target_dir}")
+    print(f"🔍 Auto-Detected Stack: {stack_desc} (suggested profile: '{detected_profile}')\n")
+
+    profile_choices = [
+        ("core", "core (Essential coding, planning, debugging, economy)"),
+        ("web", "web (Frontend, DOM, TypeScript, Chrome DevTools)"),
+        ("android", "android (Gradle, Kotlin, Jetpack Compose, AVD)"),
+        ("ai", "ai (AI frameworks, Gemini, prompt engineering)"),
+        ("all", "all (Full catalog — all discovered skills)"),
+    ]
+
+    # Reorder so detected profile is option 1
+    ordered_profiles = [p for p in profile_choices if p[0] == detected_profile] + [
+        p for p in profile_choices if p[0] != detected_profile
+    ]
+
+    print("Step 1/2: Choose Skill Profile:")
+    for idx, (p_name, p_desc) in enumerate(ordered_profiles, start=1):
+        def_mark = " [Recommended Default]" if idx == 1 else ""
+        print(f"  [{idx}] {p_desc}{def_mark}")
+
+    chosen_profile = detected_profile
+    try:
+        user_choice = input(f"\nSelect profile [1-{len(ordered_profiles)}] (Press Enter for '{detected_profile}'): ").strip()
+        if user_choice.isdigit():
+            pick_idx = int(user_choice) - 1
+            if 0 <= pick_idx < len(ordered_profiles):
+                chosen_profile = ordered_profiles[pick_idx][0]
+        elif user_choice in PROFILES:
+            chosen_profile = user_choice
+    except (EOFError, KeyboardInterrupt):
+        print("\nUsing default profile.")
+
+    print(f"\n✔ Selected Profile: {chosen_profile}")
+
+    print("\nStep 2/2: Target AI Agent Harnesses:")
+    print("  [1] All 7 Harnesses (Claude, Gemini, Cursor, Windsurf, Roo, Aider, AntiGem) [Default]")
+    print("  [2] Anthropic & Google DeepMind only (CLAUDE.md + AGENTS.md + GEMINI.md)")
+    print("  [3] IDE Rule Files only (Cursor, Windsurf, Roo Code)")
+    
+    selected_harnesses = ["all"]
+    try:
+        harness_choice = input("\nSelect harness configuration [1-3] (Press Enter for 'All'): ").strip()
+        if harness_choice == "2":
+            selected_harnesses = ["claude", "gemini"]
+        elif harness_choice == "3":
+            selected_harnesses = ["cursor", "windsurf", "roo"]
+        elif harness_choice == "1" or not harness_choice:
+            selected_harnesses = ["all"]
+    except (EOFError, KeyboardInterrupt):
+        print("\nConfiguring all harnesses.")
+
+    print(f"✔ Target Harnesses: {', '.join(selected_harnesses)}\n")
+    return chosen_profile, selected_harnesses
+
+def cmd_init(target_dir: Path, profile: str | None = None, wizard: bool = False, non_interactive: bool = False) -> int:
     """Initialize a project repository for deterministic skill routing and harness integration."""
     target_dir = target_dir.resolve()
-    print(f"Initializing Skills Router in '{target_dir.name}'...")
+    det_prof, stack_desc = detect_project_stack(target_dir)
+
+    is_interactive = wizard and not non_interactive
+    if is_interactive:
+        chosen_profile, target_harnesses = run_interactive_wizard(target_dir, det_prof, stack_desc)
+    else:
+        print(f"Initializing Skills Router in '{target_dir.name}'...")
+        chosen_profile = profile if profile and profile in PROFILES else det_prof
+        target_harnesses = ["all"]
     
     (target_dir / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
     (target_dir / "skill-registry").mkdir(parents=True, exist_ok=True)
     
-    det_prof, stack_desc = detect_project_stack(target_dir)
-    chosen_profile = profile if profile and profile in PROFILES else det_prof
     set_active_profile(target_dir, chosen_profile)
     
     # Configure AI harnesses
-    cmd_install_harness(["all"], target_dir)
+    cmd_install_harness(target_harnesses, target_dir)
     
     # Rebuild registries deterministically
     cmd_sync(target_dir)
@@ -1343,7 +1409,7 @@ def cmd_init(target_dir: Path, profile: str | None = None) -> int:
     print(f"✔ Skills Router successfully initialized in: {target_dir}")
     print(f"✔ Detected Stack : {stack_desc}")
     print(f"✔ Active Profile : {chosen_profile}")
-    print(f"✔ Harness Setup  : Configured across 7 AI agent harnesses")
+    print(f"✔ Harness Setup  : Configured for {', '.join(target_harnesses)}")
     print("=" * 60 + "\n")
     return 0
 
@@ -1626,6 +1692,13 @@ def main():
     init_p = subparsers.add_parser("init", help="Initialize project directory for deterministic skill routing and harness integration")
     init_p.add_argument("target", nargs="?", default=".", help="Target project directory")
     init_p.add_argument("--profile", default=None, help="Force specific profile (core, web, android, ai, all)")
+    init_p.add_argument("--wizard", action="store_true", help="Launch interactive setup wizard")
+    init_p.add_argument("-y", "--yes", "--non-interactive", dest="non_interactive", action="store_true", help="Non-interactive mode, accept all defaults")
+
+    # setup (alias for init --wizard)
+    setup_p = subparsers.add_parser("setup", help="Run interactive setup wizard to configure a project")
+    setup_p.add_argument("target", nargs="?", default=".", help="Target project directory")
+    setup_p.add_argument("--profile", default=None, help="Force specific profile")
 
     # session-start
     session_p = subparsers.add_parser("session-start", help="Fast session pre-flight check and ephemeral cleanup")
@@ -1649,7 +1722,10 @@ def main():
         sys.exit(cmd_offload(args.skill_id, root, all_loaded=args.all))
     elif args.command == "init":
         target = Path(args.target).resolve()
-        sys.exit(cmd_init(target, profile=args.profile))
+        sys.exit(cmd_init(target, profile=args.profile, wizard=args.wizard, non_interactive=args.non_interactive))
+    elif args.command == "setup":
+        target = Path(args.target).resolve()
+        sys.exit(cmd_init(target, profile=args.profile, wizard=True))
     elif args.command == "session-start":
         sys.exit(cmd_session_start(root, cleanup=args.cleanup))
     elif args.command == "disable":

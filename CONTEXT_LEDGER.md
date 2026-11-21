@@ -1,26 +1,27 @@
 # Context Ledger: Skills Router Meta-Skill & Token Optimization
 
-**Timestamp:** 2026-11-21T07:48:00+05:30  
+**Timestamp:** 2026-11-21T07:59:50+05:30  
 **Workspace Root:** `/data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill`  
-**Current Branch:** `main` (clean working diffs on test/script files)  
-**Status:** All 20 Unit Tests PASS (0.44s) | Benchmark 4/4 PASS (~47ms/query)  
+**Current Branch:** `main` (clean working tree, pushed to `origin/main` at `c440177`)  
+**Status:** All 21 Unit Tests PASS (0.70s) | Benchmark 4/4 PASS (~31ms / ~7.8ms/query)  
 
 ---
 
 ## 1. Created & Modified File Paths
 
-- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with deterministic manifest generation, cluster profiles (`surface`/`profile`), subagent offload contracts, direct slash command routing (`/^(\/[a-zA-Z0-9_-]+)/`), dormant catalog indexing across `.disabled` directories, on-demand hydration payload generation (`--hydrate`), on-demand staging lifecycle (`load`/`offload`/`unload`), first-time project workspace setup (`init`), and new chat session pre-flight initialization (`session-start`).
-- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): Expanded from 11 to 20 tests (+262 lines) covering deterministic sync, local project shadowing, profile lifecycle filtering, subagent offloading contracts, direct slash command routing, dormant hydration payloads, on-demand staging/unstaging, project auto-init stack detection, and session-start preflight/cleanup.
-- [`HANDOFF.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/HANDOFF.md): Updated project status, architecture milestones, and command reference.
-- [`.scratch/on-demand-and-project-init/map.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/on-demand-and-project-init/map.md): Wayfinder map tracking the 4 resolved tickets for on-demand loading and project/session initialization.
-- [`.scratch/on-demand-and-project-init/issues/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/on-demand-and-project-init/issues/): Resolved tickets `01-on-demand-load-offload-lifecycle.md`, `02-project-directory-first-time-setup.md`, `03-new-chat-session-initialization.md`, and `04-integration-benchmark-and-verification.md`.
+- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Enhanced with deterministic manifest generation, cluster profiles (`surface`/`profile`), subagent offload contracts, direct slash command routing (`/^(\/[a-zA-Z0-9_-]+)/`), dormant catalog indexing across `.disabled` directories, on-demand hydration payload generation (`--hydrate`), on-demand staging lifecycle (`load`/`offload`/`unload` with `--all`), first-time project workspace setup (`init` with auto stack detection), fast new chat session pre-flight initialization (`session-start`), and encapsulated `.to_dict()` on `ScoredCandidate`.
+- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): 21 unit tests structured across distinct test classes (`TestTextProcessing`, `TestDeterministicRouting`, `TestHarnessInstallation`, `TestManifestSyncAndShadowing`, `TestProfilesAndDormancy`, `TestOnDemandAndProjectInit`). Module-level imports strictly adhere to PEP 8.
+- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Comprehensive CLI reference documentation covering all 13 core and lifecycle commands.
+- [`HANDOFF.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/HANDOFF.md): Updated project handoff reference.
+- [`.scratch/on-demand-and-project-init/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/on-demand-and-project-init/): Wayfinder map and resolved tickets 01–04.
+- [`.scratch/skills-dormancy-router-v2/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/skills-dormancy-router-v2/): Wayfinder map and resolved tickets 01–04.
 
 ---
 
 ## 2. Active Module Signatures
 
 ```python
-# Core Dataclasses
+# Core Dataclasses & Models
 @dataclass
 class SkillRecord:
     name: str
@@ -55,8 +56,9 @@ class ScoredCandidate:
     components: dict[str, float] = field(default_factory=dict)
     matched_object: str | None = None
     matched_action: str | None = None
+    def to_dict(self) -> dict: ...
 
-# Routing, Discovery & Hydration Engine
+# Discovery & Hydration Engine
 def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> dict[str, SkillRecord]
 def resolve_skill_path(skill: SkillRecord, project_root: Path) -> Path
 def extract_metadata(skill_file: Path) -> dict
@@ -69,12 +71,14 @@ def get_active_profile(project_root: Path) -> str
 def set_active_profile(project_root: Path, profile_name: str) -> bool
 def filter_skills_by_profile(registry: dict[str, SkillRecord], profile_name: str) -> dict[str, SkillRecord]
 
-# On-Demand Staging & Project/Session Engine
-def detect_project_stack(project_root: Path) -> tuple[str, str]
-def cmd_load(skill_id: str, project_root: Path) -> int
+# On-Demand Lifecycle & Project Setup
+def load_loaded_meta(project_root: Path) -> tuple[Path, dict]
+def save_loaded_meta(meta_file: Path, data: dict) -> None
+def detect_project_stack(target_dir: Path) -> tuple[str, str]
+def cmd_load(skill_id: str, project_root: Path, custom_search_dirs: list[tuple[int, str, Path]] | None = None) -> int
 def cmd_offload(skill_id: str | None, project_root: Path, all_loaded: bool = False) -> int
-def cmd_init(project_root: Path, requested_profile: str | None = None) -> int
-def cmd_session_start(project_root: Path, cleanup: bool = False) -> int
+def cmd_init(target_dir: Path, profile: str | None = None) -> int
+def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int
 
 # CLI Command Handlers
 def cmd_sync(project_root: Path) -> int
@@ -90,12 +94,8 @@ def cmd_install_harness(harness_names: list[str], target_dir: Path) -> int
 
 ## 3. Active Errors & Stack Traces
 
-- **Zero Active Runtime Errors:** 20/20 tests passing in 0.44s (`OK`).
-- **Benchmark:** 4/4 passing (~47.8 ms total / ~12 ms/query).
-- **Code Review Items to Address:**
-  - `scripts/skills_router.py`: Support `offload --all` without requiring dummy `skill_id`; alias `--target` to `--root` on `load`/`offload`/`init`; add missing file patterns to `detect_project_stack` (`settings.gradle`, `AndroidManifest.xml`, `tsconfig.json`, `pnpm-workspace.yaml`, `setup.py`); filter active count by profile in `session-start`.
-  - `tests/test_skills_router.py`: Move method-level imports to file header; organize test classes by subsystem; add assertions for `offload --all` and `session-start --cleanup`.
-  - `README.md`: Document new commands (`init`, `load`, `offload`, `session-start`, `profile`, `surface`, `--hydrate`).
+- **Zero Active Errors:** Clean test run (21/21 passing in 0.70s).
+- **Zero Drift:** Pushed cleanly to GitHub `origin/main` (`c440177`).
 
 ---
 
@@ -127,11 +127,11 @@ def cmd_install_harness(harness_names: list[str], target_dir: Path) -> int
 - [x] Implement on-demand skill load & offload lifecycle (`load`, `offload`, `unload`).
 - [x] Implement project auto-detection & initialization (`init`).
 - [x] Implement fast new chat session initialization (`session-start`).
-- [x] Resolve all 4 Wayfinder tickets in `.scratch/on-demand-and-project-init/`.
+- [x] Resolve all Wayfinder tickets in `.scratch/`.
 - [x] Run parallel two-axis `/code-review` (Standards + Spec).
-- [ ] Address code review findings (CLI flags, stack detection manifests, test structure, `README.md`).
-- [ ] Commit working changes cleanly with conventional commit message.
-- [ ] Prepare PR / release documentation.
+- [x] Resolve all code review findings (CLI flags, stack heuristics, test classes/imports, `README.md`).
+- [x] Commit cleanly to git (`c440177`).
+- [x] Push commits to remote GitHub (`origin/main`).
 
 ---
 
