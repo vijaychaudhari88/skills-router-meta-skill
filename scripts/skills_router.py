@@ -36,7 +36,7 @@ CONFIG = {
     "route_floor": 0.45,       # Min confidence to ROUTE
     "no_route_floor": 0.14,    # Below this is NO_ROUTE
     "ambiguity_gap": 0.15,     # Gap between 1st & 2nd candidate
-    "multi_floor": 0.33,       # Min confidence to join multi-skill plan
+    "multi_floor": 0.30,       # Min confidence to join multi-skill plan
     "multi_cap": 4,            # Max skills in one plan
     "conflict_penalty": 0.30,  # Penalty for conflicting competitor
     "not_when_penalty": 0.60,  # Soft penalty for negative trigger match
@@ -62,6 +62,7 @@ RANK_WEIGHTS = {
     "trigger": 0.14,
     "name_alias": 0.16,
     "domain": 0.16,
+    "signature": 0.14,
     "specificity": 0.08,
 }
 
@@ -227,6 +228,7 @@ class SkillRecord:
     conflicts_with: list[str] = field(default_factory=list)
     domains: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
+    signatures: list[str] = field(default_factory=list)
     intents: dict[str, list[str]] = field(default_factory=dict)
 
 # ---------------------------------------------------------------------------
@@ -261,7 +263,7 @@ def phrase_matches(phrase: str, query_lower: str) -> bool:
 # Discovery & Sync Engine
 # ---------------------------------------------------------------------------
 def extract_metadata(skill_file: Path) -> dict:
-    """Extract YAML frontmatter and manifest metadata from SKILL.md and optional manifest.json."""
+    """Extract YAML frontmatter, manifest metadata, and body-aware signature fingerprints from SKILL.md."""
     data = {
         "name": "",
         "description": "",
@@ -275,22 +277,22 @@ def extract_metadata(skill_file: Path) -> dict:
         "conflicts_with": [],
         "domains": [],
         "commands": [],
+        "signatures": [],
         "intents": {},
     }
     
-    # 1. Inspect SKILL.md frontmatter
+    # 1. Inspect SKILL.md frontmatter and body signatures (first 80 lines)
     try:
         with open(skill_file, "r", encoding="utf-8", errors="ignore") as f:
-            lines = [f.readline() for _ in range(40)]
+            lines = [f.readline() for _ in range(80)]
         in_fm = 0
         desc_lines = []
+        body_lines = []
         capture_desc = False
         for line in lines:
             line_str = line.strip()
             if line_str == "---":
                 in_fm += 1
-                if in_fm == 2:
-                    break
                 continue
             if in_fm == 1:
                 if line_str.startswith("name:"):
@@ -309,7 +311,37 @@ def extract_metadata(skill_file: Path) -> dict:
                         capture_desc = False
                     else:
                         desc_lines.append(line_str.strip("\"'"))
+            elif in_fm >= 2:
+                body_lines.append(line)
+
         data["description"] = " ".join([d for d in desc_lines if d]).strip()
+
+        # Body-Aware Signature Fingerprinting (Solve Progressive Disclosure Accuracy Trap)
+        body_text = "".join(body_lines)
+        signatures = set()
+
+        # Extract markdown headings (## Heading)
+        headings = re.findall(r"^#+\s+([^\n]+)", body_text, re.MULTILINE)
+        for h in headings:
+            cleaned_h = re.sub(r"[^\w\s-]", "", h).strip().lower()
+            if cleaned_h and len(cleaned_h) > 2 and len(cleaned_h) < 40:
+                signatures.add(cleaned_h)
+
+        # Extract bold key terms (**Standards**, **Bug:**, **Risk:**)
+        bolds = re.findall(r"\*\*([^\*\n]+)\*\*", body_text)
+        for b in bolds:
+            cleaned_b = re.sub(r"[^\w\s-]", "", b).strip().lower()
+            if 2 < len(cleaned_b) < 30:
+                signatures.add(cleaned_b)
+
+        # Extract inline code patterns (`git diff`, `python3`, `/cmd`)
+        codes = re.findall(r"`([^`\n]+)`", body_text)
+        for c in codes:
+            cleaned_c = c.strip().lower()
+            if 2 < len(cleaned_c) < 40:
+                signatures.add(cleaned_c)
+
+        data["signatures"] = sorted(list(signatures))[:25]
     except Exception:
         pass
 
@@ -320,11 +352,12 @@ def extract_metadata(skill_file: Path) -> dict:
     desc = data["description"]
     desc_lower = desc.lower()
 
-    # Extract automatic initials/acronyms for hyphenated names (e.g., test-driven-development -> tdd)
+    # Extract automatic initials/acronyms for hyphenated names of 3+ words (e.g., test-driven-development -> tdd)
+    # Exclude ambiguous 2-letter collisions like pr (ponytail-review, pull-request)
     parts = name.split("-")
-    if len(parts) >= 2:
+    if len(parts) >= 3:
         acronym = "".join(p[0] for p in parts if p)
-        if len(acronym) >= 2 and acronym not in data["aliases"]:
+        if len(acronym) >= 3 and acronym not in data["aliases"]:
             data["aliases"].append(acronym)
 
     # Automatically extract use_when from description if present
@@ -411,6 +444,24 @@ def extract_metadata(skill_file: Path) -> dict:
         data["intents"]["sync"] = ["sync skill registry", "rebuild skills registry", "rebuild manifest"]
         data["intents"]["profile"] = ["switch profile", "set profile", "surface cluster"]
         data["commands"].extend(["skills-router route", "skills-router sync", "skills-router profile", "skills-router surface"])
+    elif name == "code-review":
+        data["objects"].extend(["pr", "branch", "diff", "spec", "standards", "codebase", "changes"])
+        data["actions"].extend(["review", "audit", "inspect", "verify", "check"])
+        data["domains"].extend(["review", "quality", "standards", "spec"])
+        data["use_when"].extend(["review pr", "review branch", "review changes", "code review", "two axis review", "standards and spec"])
+        data["intents"]["review"] = ["review pr against standards and spec", "code review standards", "review changes since", "spec review"]
+    elif name == "ponytail-review":
+        data["objects"].extend(["pr", "diff", "code", "changes", "bloat", "risk", "load", "scale", "bugs"])
+        data["actions"].extend(["review", "audit", "find", "check"])
+        data["domains"].extend(["review", "quality", "performance", "resilience"])
+        data["use_when"].extend(["ponytail review", "review for bloat", "holds under load", "senior dev review", "review for bugs scale"])
+        data["intents"]["review"] = ["ponytail review", "review for bugs scale and load", "senior dev review"]
+    elif name == "chisle-review":
+        data["objects"].extend(["diff", "file", "code", "bloat", "over engineering", "abstractions", "verbosity"])
+        data["actions"].extend(["review", "delete", "simplify", "flag", "shrink"])
+        data["domains"].extend(["review", "efficiency", "simplicity", "minimalism"])
+        data["use_when"].extend(["chisle review", "review for bloat", "what could be deleted or simplified", "flag over engineering"])
+        data["intents"]["review"] = ["chisle review", "review for what could be deleted", "review for over engineering"]
 
     return data
 
@@ -508,6 +559,7 @@ def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, 
                 conflicts_with=meta["conflicts_with"],
                 domains=meta["domains"],
                 commands=meta["commands"],
+                signatures=meta.get("signatures", []),
                 intents=meta["intents"],
             )
 
@@ -808,7 +860,18 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 break
         components["domain"] = dom_score
 
-        # 8. Specificity
+        # 8. Body-aware signature fingerprint match
+        sig_score = 0.0
+        matched_sigs = 0
+        for sig in s.signatures:
+            if phrase_matches(sig, query_lower) or credit_ratio(sig, req_tokens) >= 0.7:
+                matched_sigs += 1
+                evidence_parts.append(f"signature '{sig}'")
+        if matched_sigs > 0:
+            sig_score = min(1.0, 0.6 + 0.2 * matched_sigs)
+        components["signature"] = sig_score
+
+        # 9. Specificity
         spec_score = min(1.0, len(evidence_parts) * 0.2)
         components["specificity"] = spec_score
 

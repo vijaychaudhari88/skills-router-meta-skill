@@ -510,6 +510,65 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
         # Cursor should not be created since choice was 2 (claude + gemini only)
         self.assertFalse((wizard_proj / ".cursor" / "rules" / "skills-router.mdc").exists())
 
+    def test_body_signature_fingerprinting_disambiguation(self):
+        # Verify that body signatures correctly disambiguate overlapping review skills
+        mock_registry = {
+            "code-review": SkillRecord(
+                name="code-review",
+                description="Review changes along standards and spec axes.",
+                source_path="fake/cr",
+                scope="Global",
+                category="3. Debugging & Verification",
+                priority=50,
+                objects=["pr", "branch", "diff", "standards", "spec"],
+                actions=["review", "audit"],
+                domains=["review", "standards", "spec"],
+                signatures=["## spec", "## standards", "pin the fixed point"],
+                intents={"review": ["review pr against standards and spec", "code review"]}
+            ),
+            "ponytail-review": SkillRecord(
+                name="ponytail-review",
+                description="Quality review of a change: is logic right, holds under load.",
+                source_path="fake/pr",
+                scope="Global",
+                category="3. Debugging & Verification",
+                priority=50,
+                objects=["pr", "diff", "load", "scale", "bugs"],
+                actions=["review", "check"],
+                domains=["review", "performance"],
+                signatures=["holds under load", "senior dev", "scale"],
+                intents={"review": ["ponytail review", "review for bugs scale and load", "senior dev review"]}
+            ),
+            "chisle-review": SkillRecord(
+                name="chisle-review",
+                description="Review diff for what could be deleted or simplified.",
+                source_path="fake/chr",
+                scope="Global",
+                category="3. Debugging & Verification",
+                priority=50,
+                objects=["diff", "file", "bloat", "over engineering"],
+                actions=["review", "delete", "simplify"],
+                domains=["review", "efficiency"],
+                signatures=["what to flag", "what could be deleted or simplified", "over-built"],
+                intents={"review": ["chisle review", "review for what could be deleted"]}
+            ),
+        }
+
+        # 1. Query targeting standards/spec signatures routes to code-review
+        r1 = route_query("review pr against standards and spec with parallel subagents", mock_registry)
+        self.assertEqual(r1["decision"], "route")
+        self.assertEqual(r1["skill"], "code-review")
+
+        # 2. Query targeting holds under load / scale signatures routes to ponytail-review
+        r2 = route_query("review my pr for bugs, scale, and what breaks under real load like a senior dev", mock_registry)
+        self.assertEqual(r2["decision"], "route")
+        self.assertEqual(r2["skill"], "ponytail-review")
+
+        # 3. Query targeting chisle / what could be deleted routes to chisle-review
+        r3 = route_query("chisle review this diff for what could be deleted or simplified", mock_registry)
+        self.assertEqual(r3["decision"], "route")
+        self.assertEqual(r3["skill"], "chisle-review")
+
 
 if __name__ == "__main__":
     unittest.main()
