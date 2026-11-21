@@ -19,6 +19,10 @@ from skills_router import (
     ScoredCandidate,
     SkillRecord,
     build_pipeline_declaration,
+    build_subagent_dispatch,
+    extract_hydration_payload,
+    extract_metadata,
+    resolve_skill_dependencies,
     cmd_init,
     cmd_install_harness,
     cmd_load,
@@ -835,6 +839,193 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
             self.assertEqual(res, 0)
             data = json.loads(buf.getvalue())
             self.assertFalse(data.get("required"))
+
+
+class TestSkillCompositionAndDelegation(unittest.TestCase):
+    """Test suite for skill-to-skill composition (involves, delegates_to), cycle protection, and subagent synthesis."""
+
+    def test_extract_metadata_involves_and_delegates(self):
+        """Test frontmatter and prose extraction of involves and delegates_to."""
+        with tempfile.TemporaryDirectory(prefix="comp_meta_") as tmp_dir:
+            skill_dir = Path(tmp_dir) / "test-composite-skill"
+            skill_dir.mkdir(parents=True)
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text(
+                "---\n"
+                "name: test-composite-skill\n"
+                "description: Composite orchestrator skill\n"
+                "involves: [test-driven-development, codebase-design]\n"
+                "delegates_to:\n"
+                "  - chrome-devtools\n"
+                "---\n\n"
+                "# Instructions\n"
+                "When preparing tickets, call the Skill tool with \"research\".\n"
+                "For code quality, delegated subagent calling the Skill tool for \"code-review\".\n",
+                encoding="utf-8"
+            )
+
+            meta = extract_metadata(skill_file)
+            self.assertEqual(meta["name"], "test-composite-skill")
+            self.assertIn("test-driven-development", meta["involves"])
+            self.assertIn("codebase-design", meta["involves"])
+            self.assertIn("research", meta["involves"])  # extracted from prose
+            self.assertIn("chrome-devtools", meta["delegates_to"])  # from frontmatter
+            self.assertIn("code-review", meta["delegates_to"])  # extracted from prose subagent sentence
+
+    def test_recursive_pipeline_expansion(self):
+        """Test that build_pipeline_declaration expands involved skills into appropriate phases."""
+        mock_registry = {
+            "wayfinder": SkillRecord(
+                name="wayfinder",
+                description="Planning roadmap",
+                source_path="fake/wayfinder",
+                scope="Global",
+                category="1. Planning",
+                priority=60,
+                involves=["implement"]
+            ),
+            "implement": SkillRecord(
+                name="implement",
+                description="Implementation orchestrator",
+                source_path="fake/implement",
+                scope="Global",
+                category="2. Implementation",
+                priority=50,
+                involves=["tdd", "code-review"]
+            ),
+            "tdd": SkillRecord(
+                name="test-driven-development",
+                description="TDD workflow",
+                source_path="fake/tdd",
+                scope="Global",
+                category="3. Debugging & Verification",
+                priority=50
+            ),
+            "code-review": SkillRecord(
+                name="code-review",
+                description="Code review workflow",
+                source_path="fake/code-review",
+                scope="Global",
+                category="3. Debugging & Verification",
+                priority=50
+            ),
+        }
+
+        cand = ScoredCandidate(skill=mock_registry["wayfinder"], confidence=0.90)
+        pipeline = build_pipeline_declaration([cand], query="plan feature", registry=mock_registry)
+
+        self.assertIn("wayfinder", pipeline["Phase 2 (Pre-Execution)"])
+        self.assertIn("implement", pipeline["Phase 3 (Execution)"])
+        self.assertIn("test-driven-development", pipeline["Phase 4 (Verification)"])
+        self.assertIn("code-review", pipeline["Phase 4 (Verification)"])
+
+    def test_circular_dependency_protection(self):
+        """Test that circular involves references are detected and broken without recursion error."""
+        mock_registry = {
+            "skill-a": SkillRecord(
+                name="skill-a",
+                description="Skill A",
+                source_path="fake/a",
+                scope="Project",
+                category="2. Implementation",
+                priority=50,
+                involves=["skill-b"]
+            ),
+            "skill-b": SkillRecord(
+                name="skill-b",
+                description="Skill B",
+                source_path="fake/b",
+                scope="Project",
+                category="2. Implementation",
+                priority=50,
+                involves=["skill-a"]  # Circular: A -> B -> A
+            ),
+        }
+
+        resolved, warnings = resolve_skill_dependencies("skill-a", mock_registry, max_depth=3)
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0].name, "skill-b")
+        self.assertTrue(any("Circular" in w for w in warnings))
+
+        # Test pipeline build includes composition_warnings
+        cand = ScoredCandidate(skill=mock_registry["skill-a"], confidence=0.85)
+        pipeline = build_pipeline_declaration([cand], query="run circular", registry=mock_registry)
+        self.assertIn("composition_warnings", pipeline)
+        self.assertTrue(len(pipeline["composition_warnings"]) >= 1)
+
+    def test_delegated_skills_synthesize_subagent_dispatch(self):
+        """Test that skills with delegates_to synthesize subagent dispatch contracts."""
+        mock_registry = {
+            "wayfinder": SkillRecord(
+                name="wayfinder",
+                description="Wayfinder planning",
+                source_path="fake/wayfinder",
+                scope="Global",
+                category="1. Planning",
+                priority=60,
+                delegates_to=["research"],
+                commands=["/wayfinder"]
+            ),
+            "research": SkillRecord(
+                name="research",
+                description="Research codebase and docs",
+                source_path="fake/research",
+                scope="Global",
+                category="1. Planning",
+                priority=50
+            ),
+        }
+
+        res = route_query("/wayfinder plan new feature", mock_registry)
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["skill"], "wayfinder")
+        self.assertIn("subagent_dispatch", res)
+
+        dispatch = res["subagent_dispatch"]
+        self.assertTrue(dispatch["required"])
+        self.assertEqual(dispatch["primary_subagent"]["skill"], "research")
+        self.assertEqual(dispatch["primary_subagent"]["typeName"], "research")
+        self.assertEqual(dispatch["primary_subagent"]["model"], "flash")
+        self.assertEqual(dispatch["primary_subagent"]["role"], "Research Specialist")
+
+    def test_transitive_hydration(self):
+        """Test that extract_hydration_payload hydrates involved child skills when requested."""
+        with tempfile.TemporaryDirectory(prefix="comp_hyd_") as tmp_dir:
+            proj = Path(tmp_dir)
+            skill_a_dir = proj / ".agents" / "skills" / "skill-parent"
+            skill_b_dir = proj / ".agents" / "skills" / "skill-child"
+            skill_a_dir.mkdir(parents=True)
+            skill_b_dir.mkdir(parents=True)
+
+            (skill_a_dir / "SKILL.md").write_text("---\nname: skill-parent\n---\nParent body", encoding="utf-8")
+            (skill_b_dir / "SKILL.md").write_text("---\nname: skill-child\n---\nChild instructions", encoding="utf-8")
+
+            rec_b = SkillRecord(
+                name="skill-child",
+                description="Child",
+                source_path=f"./.agents/skills/skill-child/SKILL.md",
+                scope="Project",
+                category="2. Implementation",
+                priority=50
+            )
+            rec_a = SkillRecord(
+                name="skill-parent",
+                description="Parent",
+                source_path=f"./.agents/skills/skill-parent/SKILL.md",
+                scope="Project",
+                category="1. Planning",
+                priority=50,
+                involves=["skill-child"]
+            )
+            mock_registry = {"skill-parent": rec_a, "skill-child": rec_b}
+
+            payload = extract_hydration_payload(rec_a, project_root=proj, registry=mock_registry)
+            self.assertEqual(payload["skill"], "skill-parent")
+            self.assertIn("Parent body", payload["instructions"])
+            self.assertIn("involved_hydrations", payload)
+            self.assertIn("skill-child", payload["involved_hydrations"])
+            self.assertIn("Child instructions", payload["involved_hydrations"]["skill-child"]["instructions"])
+
 
 
 if __name__ == "__main__":

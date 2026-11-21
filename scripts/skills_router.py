@@ -282,6 +282,8 @@ class SkillRecord:
     domains: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
     signatures: list[str] = field(default_factory=list)
+    involves: list[str] = field(default_factory=list)
+    delegates_to: list[str] = field(default_factory=list)
     intents: dict[str, list[str]] = field(default_factory=dict)
 
 # ---------------------------------------------------------------------------
@@ -331,21 +333,26 @@ def extract_metadata(skill_file: Path) -> dict:
         "domains": [],
         "commands": [],
         "signatures": [],
+        "involves": [],
+        "delegates_to": [],
         "intents": {},
     }
     
     # 1. Inspect SKILL.md frontmatter and body signatures (first 80 lines)
     try:
         with open(skill_file, "r", encoding="utf-8", errors="ignore") as f:
-            lines = [f.readline() for _ in range(80)]
+            lines = [f.readline() for _ in range(150)]
         in_fm = 0
         desc_lines = []
         body_lines = []
         capture_desc = False
+        current_list_key = None
         for line in lines:
             line_str = line.strip()
             if line_str == "---":
                 in_fm += 1
+                capture_desc = False
+                current_list_key = None
                 continue
             if in_fm == 1:
                 if line_str.startswith("name:"):
@@ -359,6 +366,32 @@ def extract_metadata(skill_file: Path) -> dict:
                     raw_cmds = line_str[9:].strip().strip("[]\"'")
                     data["commands"] = [c.strip().strip("\"'") for c in raw_cmds.split(",") if c.strip()]
                     capture_desc = False
+                elif line_str.startswith(("involves:", "depends_on:")):
+                    val = line_str.split(":", 1)[1].strip()
+                    capture_desc = False
+                    if val.startswith("[") and val.endswith("]"):
+                        data["involves"].extend([c.strip().strip("'\"") for c in val[1:-1].split(",") if c.strip()])
+                        current_list_key = None
+                    elif val:
+                        data["involves"].append(val.strip("'\""))
+                        current_list_key = None
+                    else:
+                        current_list_key = "involves"
+                elif line_str.startswith("delegates_to:"):
+                    val = line_str[13:].strip()
+                    capture_desc = False
+                    if val.startswith("[") and val.endswith("]"):
+                        data["delegates_to"].extend([c.strip().strip("'\"") for c in val[1:-1].split(",") if c.strip()])
+                        current_list_key = None
+                    elif val:
+                        data["delegates_to"].append(val.strip("'\""))
+                        current_list_key = None
+                    else:
+                        current_list_key = "delegates_to"
+                elif current_list_key and line_str.startswith("-"):
+                    item = line_str.lstrip("-").strip().strip("'\"")
+                    if item and item not in data[current_list_key]:
+                        data[current_list_key].append(item)
                 elif capture_desc:
                     if re.match(r"^[a-zA-Z0-9_-]+:", line_str):
                         capture_desc = False
@@ -395,6 +428,27 @@ def extract_metadata(skill_file: Path) -> dict:
                 signatures.add(cleaned_c)
 
         data["signatures"] = sorted(list(signatures))[:25]
+    
+        # Extract prose skill-to-skill composition & subagent delegation
+        prose_pattern = re.compile(
+            r"(?:calls?|use|using|invoke|invoking|calling)\s+the\s+skill\s+tool\s+(?:twice\s*,?\s*)?(?:for|with)\s+([^.\n;]+)",
+            re.IGNORECASE
+        )
+        prose_sentences = re.split(r"[.\n;]+", body_text)
+        for sent in prose_sentences:
+            for m in prose_pattern.finditer(sent):
+                phrase = m.group(1)
+                found_skills = re.findall(r'["\'`]([a-zA-Z0-9_-]+)["\'`]', phrase)
+                is_subagent = bool(re.search(r"\bsubagent\b", sent, re.IGNORECASE))
+                for s in found_skills:
+                    clean_s = s.strip("'\"`").lower()
+                    if clean_s and clean_s not in ("and", "or", "for", "with", "the", "twice", "to"):
+                        if is_subagent:
+                            if clean_s not in data["delegates_to"]:
+                                data["delegates_to"].append(clean_s)
+                        else:
+                            if clean_s not in data["involves"]:
+                                data["involves"].append(clean_s)
     except Exception:
         pass
 
@@ -429,7 +483,7 @@ def extract_metadata(skill_file: Path) -> dict:
         try:
             m_data = json.loads(manifest_path.read_text(encoding="utf-8"))
             for key in ["aliases", "keywords", "capabilities", "use_when", "not_when",
-                        "objects", "actions", "conflicts_with", "domains"]:
+                        "objects", "actions", "conflicts_with", "domains", "involves", "delegates_to"]:
                 if key in m_data and isinstance(m_data[key], list):
                     data[key].extend(m_data[key])
             if "intents" in m_data and isinstance(m_data["intents"], dict):
@@ -613,6 +667,8 @@ def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, 
                 domains=meta["domains"],
                 commands=meta["commands"],
                 signatures=meta.get("signatures", []),
+                involves=meta.get("involves", []),
+                delegates_to=meta.get("delegates_to", []),
                 intents=meta["intents"],
             )
 
@@ -682,7 +738,214 @@ def format_skills_applied_markdown(summary: list[dict]) -> str:
         lines.append(f"> - `{s['skill']}`: {s['reason']}")
     return "\n".join(lines)
 
-def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = None) -> dict:
+# ---------------------------------------------------------------------------
+# Skill Composition, Recursive Pipeline Expansion & Subagent Delegation Engine
+# ---------------------------------------------------------------------------
+def resolve_skill_dependencies(
+    skill_name: str,
+    registry: dict[str, SkillRecord],
+    visited: set[str] | None = None,
+    depth: int = 0,
+    max_depth: int = 3
+) -> tuple[list[SkillRecord], list[str]]:
+    """Recursively resolve involved skills with cycle protection and max recursion depth.
+    
+    Returns:
+        (resolved_skills, cycle_warnings)
+    """
+    if visited is None:
+        visited = set()
+    
+    if skill_name in visited:
+        return [], [f"Circular composition detected on '{skill_name}'; breaking recursion cycle."]
+    
+    visited.add(skill_name)
+    resolved: list[SkillRecord] = []
+    warnings: list[str] = []
+    
+    if skill_name not in registry:
+        return [], warnings
+    
+    root_skill = registry[skill_name]
+    
+    if depth >= max_depth:
+        return [], [f"Max composition depth ({max_depth}) exceeded at '{skill_name}'."]
+    
+    for child_name in root_skill.involves:
+        if child_name in visited:
+            warnings.append(f"Circular dependency '{skill_name}' -> '{child_name}' prevented.")
+            continue
+        if child_name in registry:
+            child_skill = registry[child_name]
+            resolved.append(child_skill)
+            sub_resolved, sub_warn = resolve_skill_dependencies(
+                child_name, registry, visited=visited, depth=depth + 1, max_depth=max_depth
+            )
+            resolved.extend(sub_resolved)
+            warnings.extend(sub_warn)
+            
+    # Deduplicate while preserving topological insertion order
+    seen = set()
+    unique_resolved = []
+    for s in resolved:
+        if s.name not in seen:
+            seen.add(s.name)
+            unique_resolved.append(s)
+            
+    return unique_resolved, warnings
+
+def build_pipeline_declaration(
+    selected_candidates: list[ScoredCandidate],
+    query: str = "",
+    registry: dict[str, SkillRecord] | None = None
+) -> dict:
+    """Format canonical 4-phase execution pipeline, expanding involved skills dynamically."""
+    guardrails = ["using-superpowers", "agent-memory-discipline", "tokenleak"]
+    pre_exec = []
+    exec_skills = []
+    verify_skills = ["verification-before-completion"]
+    subagent_offload = []
+    
+    # 1. Expand dependencies for candidates if registry is provided
+    expanded_skills: list[SkillRecord] = []
+    composition_warnings: list[str] = []
+    
+    for c in selected_candidates:
+        expanded_skills.append(c.skill)
+        if registry:
+            inv_skills, warns = resolve_skill_dependencies(c.skill.name, registry)
+            expanded_skills.extend(inv_skills)
+            composition_warnings.extend(warns)
+            
+    # Deduplicate expanded skills
+    seen_names = set()
+    unique_skills: list[SkillRecord] = []
+    for s in expanded_skills:
+        if s.name not in seen_names:
+            seen_names.add(s.name)
+            unique_skills.append(s)
+            
+    # 2. Stage into 4 phases
+    for s in unique_skills:
+        name = s.name
+        cat = s.category
+        if "Planning" in cat:
+            pre_exec.append(name)
+        elif "Implementation" in cat or "Domain" in cat:
+            exec_skills.append(name)
+        elif "Debugging" in cat or "Verification" in cat:
+            verify_skills.append(name)
+        else:
+            pre_exec.append(name)
+            
+        if name in HEAVY_SUBAGENT_SKILLS:
+            meta = HEAVY_SUBAGENT_SKILLS[name]
+            subagent_offload.append({
+                "skill": name,
+                "recommended_role": meta["role"],
+                "isolation": meta["isolation"],
+                "reason": meta["reason"]
+            })
+            
+    if not pre_exec:
+        pre_exec = ["writing-plans"]
+    if not exec_skills:
+        exec_skills = ["test-driven-development"]
+        
+    decl = {
+        "Phase 1 (Guardrails)": guardrails,
+        "Phase 2 (Pre-Execution)": list(dict.fromkeys(pre_exec)),
+        "Phase 3 (Execution)": list(dict.fromkeys(exec_skills)),
+        "Phase 4 (Verification)": list(dict.fromkeys(verify_skills)),
+    }
+    if subagent_offload:
+        decl["subagent_offload"] = subagent_offload
+    if composition_warnings:
+        decl["composition_warnings"] = composition_warnings
+        
+    return decl
+
+def build_subagent_dispatch(
+    selected_candidates: list[ScoredCandidate],
+    query: str = "",
+    registry: dict[str, SkillRecord] | None = None
+) -> dict | None:
+    """Standardize machine-readable subagent dispatch contract for heavy tasks or delegated skills."""
+    dispatches = []
+    seen_dispatches = set()
+    
+    for c in selected_candidates:
+        name = c.skill.name
+        # Check standard heavy skills
+        if name in HEAVY_SUBAGENT_SKILLS and name not in seen_dispatches:
+            meta = HEAVY_SUBAGENT_SKILLS[name]
+            dispatches.append({
+                "skill": name,
+                "role": meta["role"],
+                "typeName": meta["typeName"],
+                "model": meta["model"],
+                "isolation": meta["isolation"],
+                "reason": meta["reason"],
+                "prompt_template": (
+                    f"Perform delegated '{name}' execution for task: \"{query}\". "
+                    f"Adhere strictly to: {meta['deliverable_contract']}"
+                ),
+                "deliverable_contract": meta["deliverable_contract"]
+            })
+            seen_dispatches.add(name)
+            
+        # Check delegated skills in delegates_to
+        for del_name in getattr(c.skill, "delegates_to", []):
+            if del_name not in seen_dispatches:
+                if del_name in HEAVY_SUBAGENT_SKILLS:
+                    meta = HEAVY_SUBAGENT_SKILLS[del_name]
+                    dispatches.append({
+                        "skill": del_name,
+                        "role": meta["role"],
+                        "typeName": meta["typeName"],
+                        "model": meta["model"],
+                        "isolation": meta["isolation"],
+                        "reason": meta["reason"],
+                        "prompt_template": (
+                            f"Perform delegated '{del_name}' execution for task: \"{query}\". "
+                            f"Adhere strictly to: {meta['deliverable_contract']}"
+                        ),
+                        "deliverable_contract": meta["deliverable_contract"]
+                    })
+                else:
+                    role_name = f"{del_name.replace('-', ' ').title()} Specialist"
+                    dispatches.append({
+                        "skill": del_name,
+                        "role": role_name,
+                        "typeName": "research" if ("research" in del_name or "audit" in del_name) else "self",
+                        "model": "flash" if ("research" in del_name or "audit" in del_name) else "inherit",
+                        "isolation": "ephemeral_subagent",
+                        "reason": f"Delegated subagent execution for '{del_name}' requested by parent skill '{name}'",
+                        "prompt_template": (
+                            f"Perform delegated '{del_name}' execution for parent skill '{name}' on task: \"{query}\". "
+                            f"Deliver structured, high-signal results (<= 30 lines max). No raw token dumps."
+                        ),
+                        "deliverable_contract": "Structured summary report with actionable findings and zero raw dump (<= 30 lines)."
+                    })
+                seen_dispatches.add(del_name)
+                
+    if not dispatches:
+        return None
+        
+    primary = dispatches[0]
+    return {
+        "required": True,
+        "primary_subagent": primary,
+        "dispatches": dispatches,
+        "isolation_rationale": "Token conservation & context isolation: delegate execution to ephemeral subagent.",
+    }
+
+def extract_hydration_payload(
+    skill: SkillRecord,
+    project_root: Path | None = None,
+    registry: dict[str, SkillRecord] | None = None
+) -> dict:
+    """Extract instructions for a skill and transitively hydrate involved child skills."""
     root = project_root or Path.cwd()
     src_path = resolve_skill_path(skill, root)
     if not src_path.exists():
@@ -695,13 +958,39 @@ def extract_hydration_payload(skill: SkillRecord, project_root: Path | None = No
             instructions = src_path.read_text(encoding="utf-8")
         except Exception:
             instructions = ""
-    return {
+            
+    payload = {
         "skill": skill.name,
         "source_path": skill.source_path,
         "is_dormant": getattr(skill, "is_dormant", False),
+        "involves": getattr(skill, "involves", []),
+        "delegates_to": getattr(skill, "delegates_to", []),
         "instructions": instructions,
         "activation_command": f"skills-router enable {skill.name}" if getattr(skill, "is_dormant", False) else None
     }
+    
+    # Transitive hydration for involved skills
+    if registry and getattr(skill, "involves", []):
+        inv_hydrations = {}
+        for child_name in skill.involves:
+            if child_name in registry:
+                child_skill = registry[child_name]
+                c_path = resolve_skill_path(child_skill, root)
+                c_inst = ""
+                if c_path.exists():
+                    try:
+                        c_inst = c_path.read_text(encoding="utf-8")
+                    except Exception:
+                        pass
+                inv_hydrations[child_name] = {
+                    "source_path": child_skill.source_path,
+                    "is_dormant": getattr(child_skill, "is_dormant", False),
+                    "instructions": c_inst
+                }
+        if inv_hydrations:
+            payload["involved_hydrations"] = inv_hydrations
+            
+    return payload
 
 def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict:
     """Execute two-stage deterministic routing over the discovered skill registry."""
@@ -744,14 +1033,14 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 "evidence": f"slash command '/{cmd_name}' matched '{matched_skill.name}'",
                 "is_dormant": getattr(matched_skill, "is_dormant", False),
                 "validated": True,
-                "pipeline": build_pipeline_declaration([cand], query=query),
+                "pipeline": build_pipeline_declaration([cand], query=query, registry=registry),
                 "debug": None
             }
-            dispatch = build_subagent_dispatch([cand], query=query)
+            dispatch = build_subagent_dispatch([cand], query=query, registry=registry)
             if dispatch:
                 res["subagent_dispatch"] = dispatch
             if getattr(matched_skill, "is_dormant", False) or hydrate:
-                res["hydration"] = extract_hydration_payload(matched_skill, project_root)
+                res["hydration"] = extract_hydration_payload(matched_skill, project_root, registry=registry)
             return res
 
     req_tokens = set(tokenize(query))
@@ -1051,10 +1340,10 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             "confidence": round(winner.confidence, 3),
             "evidence": "; ".join(winner.evidence),
             "validated": True,
-            "pipeline": build_pipeline_declaration(multi_plan, query=query),
+            "pipeline": build_pipeline_declaration(multi_plan, query=query, registry=registry),
             "debug": [format_cand(c) for c in candidates[:5]] if debug else None
         }
-        dispatch = build_subagent_dispatch(multi_plan, query=query)
+        dispatch = build_subagent_dispatch(multi_plan, query=query, registry=registry)
         if dispatch:
             res["subagent_dispatch"] = dispatch
         return res
@@ -1078,14 +1367,14 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 "alternative": second.skill.name if second else None,
                 "is_dormant": is_dormant,
                 "validated": bool(cmd),
-                "pipeline": build_pipeline_declaration([winner], query=query),
+                "pipeline": build_pipeline_declaration([winner], query=query, registry=registry),
                 "debug": [format_cand(c) for c in candidates[:5]] if debug else None
             }
-            dispatch = build_subagent_dispatch([winner], query=query)
+            dispatch = build_subagent_dispatch([winner], query=query, registry=registry)
             if dispatch:
                 res["subagent_dispatch"] = dispatch
             if is_dormant or hydrate:
-                res["hydration"] = extract_hydration_payload(winner.skill, project_root)
+                res["hydration"] = extract_hydration_payload(winner.skill, project_root, registry=registry)
             return res
 
     # AMBIGUOUS
@@ -1122,83 +1411,6 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         "pipeline": {},
         "debug": [format_cand(c) for c in candidates[:5]] if debug else None
     }
-
-def build_subagent_dispatch(selected_candidates: list[ScoredCandidate], query: str = "") -> dict | None:
-    """Standardize machine-readable subagent dispatch contract for heavy/isolated tasks."""
-    heavy_matches = []
-    for c in selected_candidates:
-        name = c.skill.name
-        if name in HEAVY_SUBAGENT_SKILLS:
-            meta = HEAVY_SUBAGENT_SKILLS[name]
-            heavy_matches.append({
-                "skill": name,
-                "role": meta["role"],
-                "typeName": meta["typeName"],
-                "model": meta["model"],
-                "isolation": meta["isolation"],
-                "reason": meta["reason"],
-                "prompt_template": (
-                    f"Perform delegated '{name}' execution for task: \"{query}\". "
-                    f"Adhere strictly to: {meta['deliverable_contract']}"
-                ),
-                "deliverable_contract": meta["deliverable_contract"]
-            })
-
-    if not heavy_matches:
-        return None
-
-    primary = heavy_matches[0]
-    return {
-        "required": True,
-        "primary_subagent": primary,
-        "dispatches": heavy_matches,
-        "isolation_rationale": "Token conservation & context isolation: delegate high-volume tool execution to ephemeral subagent.",
-    }
-
-def build_pipeline_declaration(selected_candidates: list[ScoredCandidate], query: str = "") -> dict:
-    """Format canonical 4-phase execution pipeline."""
-    guardrails = ["using-superpowers", "agent-memory-discipline", "tokenleak"]
-    pre_exec = []
-    exec_skills = []
-    verify_skills = ["verification-before-completion"]
-    subagent_offload = []
-
-    for c in selected_candidates:
-        name = c.skill.name
-        cat = c.skill.category
-        if "Planning" in cat:
-            pre_exec.append(name)
-        elif "Implementation" in cat or "Domain" in cat:
-            exec_skills.append(name)
-        elif "Debugging" in cat or "Verification" in cat:
-            verify_skills.append(name)
-        else:
-            pre_exec.append(name)
-
-        if name in HEAVY_SUBAGENT_SKILLS:
-            meta = HEAVY_SUBAGENT_SKILLS[name]
-            subagent_offload.append({
-                "skill": name,
-                "recommended_role": meta["role"],
-                "isolation": meta["isolation"],
-                "reason": meta["reason"]
-            })
-
-    if not pre_exec:
-        pre_exec = ["writing-plans"]
-    if not exec_skills:
-        exec_skills = ["test-driven-development"]
-
-    decl = {
-        "Phase 1 (Guardrails)": guardrails,
-        "Phase 2 (Pre-Execution)": list(dict.fromkeys(pre_exec)),
-        "Phase 3 (Execution)": list(dict.fromkeys(exec_skills)),
-        "Phase 4 (Verification)": list(dict.fromkeys(verify_skills)),
-    }
-    if subagent_offload:
-        decl["subagent_offload"] = subagent_offload
-
-    return decl
 
 # ---------------------------------------------------------------------------
 # Profile Management & Staging Engine
