@@ -842,6 +842,34 @@ class TestOnDemandAndProjectInit(unittest.TestCase):
 
 
 class TestSkillCompositionAndDelegation(unittest.TestCase):
+    def test_open_code_review_delegate_slash_and_aliases(self):
+        """Test that /ocr-review, /ocr, and aliases route deterministically to open-code-review-delegate."""
+        mock_registry = {
+            "ocrd": SkillRecord(
+                name="open-code-review-delegate",
+                description="Review workspace changes with host agent",
+                source_path="fake/ocr-delegate",
+                scope="Project",
+                category="3. Debugging & Verification",
+                priority=60,
+                aliases=["ocr", "ocr-review", "open-code-review"],
+                commands=["/ocr-review", "/ocr"]
+            )
+        }
+
+        # Test command 1: /ocr-review
+        res1 = route_query("/ocr-review of entire repository sources", mock_registry)
+        self.assertEqual(res1["decision"], "route")
+        self.assertEqual(res1["status"], "slash_command")
+        self.assertEqual(res1["skill"], "open-code-review-delegate")
+
+        # Test command 2: /ocr
+        res2 = route_query("/ocr diff against main", mock_registry)
+        self.assertEqual(res2["decision"], "route")
+        self.assertEqual(res2["status"], "slash_command")
+        self.assertEqual(res2["skill"], "open-code-review-delegate")
+
+
     """Test suite for skill-to-skill composition (involves, delegates_to), cycle protection, and subagent synthesis."""
 
     def test_extract_metadata_involves_and_delegates(self):

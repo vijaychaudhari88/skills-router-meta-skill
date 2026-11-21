@@ -285,6 +285,8 @@ class SkillRecord:
     involves: list[str] = field(default_factory=list)
     delegates_to: list[str] = field(default_factory=list)
     intents: dict[str, list[str]] = field(default_factory=dict)
+    normalized_name: str = ""
+    normalized_spaced_name: str = ""
 
 # ---------------------------------------------------------------------------
 # Normalization & Text Processing
@@ -675,6 +677,8 @@ def discover_all_skills(project_root: Path, custom_search_dirs: list[tuple[int, 
                 involves=meta.get("involves", []),
                 delegates_to=meta.get("delegates_to", []),
                 intents=meta["intents"],
+                normalized_name=name.lower(),
+                normalized_spaced_name=name.lower().replace("-", " "),
             )
 
             if name in registry:
@@ -1072,8 +1076,10 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         c_score = 0.0
         s_name = skill.name.lower()
         
-        # Name match
-        if phrase_matches(s_name, query_lower) or phrase_matches(s_name.replace("-", " "), query_lower):
+        # Name match (optimized with pre-computed normalized variants)
+        s_norm = skill.normalized_name or s_name
+        s_spaced = skill.normalized_spaced_name or s_name.replace("-", " ")
+        if phrase_matches(s_norm, query_lower) or phrase_matches(s_spaced, query_lower):
             c_score += STAGE_A_WEIGHTS["name"]
         
         # Alias match
@@ -1189,9 +1195,11 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 break
         components["trigger"] = trig_score
 
-        # 6. Name / Alias
+        # 6. Name / Alias (optimized with pre-computed normalized variants)
         name_score = 0.0
-        if phrase_matches(s_name, query_lower) or phrase_matches(s_name.replace("-", " "), query_lower):
+        s_norm = s.normalized_name or s_name
+        s_spaced = s.normalized_spaced_name or s_name.replace("-", " ")
+        if phrase_matches(s_norm, query_lower) or phrase_matches(s_spaced, query_lower):
             name_score = 1.0
             evidence_parts.append(f"name '{s.name}'")
         else:
@@ -1718,9 +1726,11 @@ def load_routing_history(project_root: Path | str) -> tuple[Path, dict]:
     return history_file, data
 
 def save_routing_history(history_file: Path, data: dict) -> None:
-    """Helper to write .agents/skills/.routing-history.json deterministically."""
+    """Helper to write .agents/skills/.routing-history.json deterministically and atomically."""
     history_file.parent.mkdir(parents=True, exist_ok=True)
-    history_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_file = history_file.with_name(f"{history_file.name}.tmp")
+    tmp_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_file.replace(history_file)
 
 def cmd_record(skill_id: str, outcome: str, project_root: Path | str, query: str | None = None) -> int:
     """Record execution feedback (success/failure) for a routed skill."""
@@ -2149,10 +2159,15 @@ def install_antigem_commands(target_dir: Path) -> str:
         import xml.etree.ElementTree as ET
         tree = ET.parse(xml_path)
         node = tree.getroot().find('.//string[@name="commands"]')
-        if node is None or not node.text:
+        if node is None:
             return "skipped (commands string node missing in XML)"
-        commands = json.loads(node.text)
-        commands = [c for c in commands if c.get("name") not in ("skills-manager", "route", "route_skills")]
+        try:
+            commands = json.loads(node.text) if node.text else []
+            if not isinstance(commands, list):
+                commands = []
+        except Exception:
+            commands = []
+        commands = [c for c in commands if isinstance(c, dict) and c.get("name") not in ("skills-manager", "route", "route_skills")]
 
         script_dir = Path(__file__).resolve().parent
         snippet_file = script_dir.parent / "templates" / "harnesses" / "antigem" / "custom_slash_commands_snippet.json"
