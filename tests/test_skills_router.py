@@ -1155,5 +1155,44 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
 
 
 
+    def test_active_route_persistence_and_detection(self):
+        """Ticket 01 & 02: Test that active route is persisted on route and outcome detected."""
+        from skills_router import (
+            save_active_route,
+            load_active_route,
+            clear_active_route,
+            detect_execution_outcome
+        )
+
+        with tempfile.TemporaryDirectory(prefix="active_route_") as tmp_dir:
+            proj = Path(tmp_dir)
+
+            # Initially no active route
+            self.assertIsNone(load_active_route(proj))
+
+            # Save active route state
+            save_active_route(proj, ["test-driven-development"], "run tests for feature")
+            active = load_active_route(proj)
+            self.assertIsNotNone(active)
+            self.assertEqual(active["skills"], ["test-driven-development"])
+            self.assertEqual(active["query"], "run tests for feature")
+
+            # Detect outcome when ledger has no error
+            ledger = proj / "CONTEXT_LEDGER.md"
+            ledger.write_text("# Context Ledger\n### Active Status\nStep verification PASSED 40 tests ok, 0 errors\n", encoding="utf-8")
+            outcome, reason = detect_execution_outcome(proj)
+            self.assertEqual(outcome, "success")
+
+            # Detect outcome when ledger reports failure
+            ledger.write_text("# Context Ledger\n### Active Errors\nAssertionError: test failed\n", encoding="utf-8")
+            outcome_fail, reason_fail = detect_execution_outcome(proj)
+            self.assertEqual(outcome_fail, "failure")
+            self.assertIn("error", reason_fail.lower())
+
+            # Clear active route
+            clear_active_route(proj)
+            self.assertIsNone(load_active_route(proj))
+
+
 if __name__ == "__main__":
     unittest.main()

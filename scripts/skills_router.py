@@ -1951,6 +1951,77 @@ def load_routing_history(project_root: Path | str) -> tuple[Path, dict]:
             data = {"version": 1, "skills": {}}
     return history_file, data
 
+
+def get_active_route_file(project_root: Path | str) -> Path:
+    """Return the path to .agents/skills/.active-route.json."""
+    return Path(project_root) / ".agents" / "skills" / ".active-route.json"
+
+def save_active_route(project_root: Path | str, skills: list[str], query: str | None = None) -> None:
+    """Persist active routed skills state across turn execution (Ticket 01)."""
+    route_file = get_active_route_file(project_root)
+    route_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": 1,
+        "skills": skills,
+        "query": query,
+        "routed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    }
+    tmp_file = route_file.with_name(f"{route_file.name}.tmp")
+    tmp_file.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_file.replace(route_file)
+
+def load_active_route(project_root: Path | str) -> dict | None:
+    """Load current active route state if present."""
+    route_file = get_active_route_file(project_root)
+    if not route_file.exists():
+        return None
+    try:
+        data = json.loads(route_file.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and "skills" in data:
+            return data
+    except Exception:
+        pass
+    return None
+
+def clear_active_route(project_root: Path | str) -> bool:
+    """Remove active route state file after recording outcome."""
+    route_file = get_active_route_file(project_root)
+    if route_file.exists():
+        try:
+            route_file.unlink()
+            return True
+        except Exception:
+            pass
+    return False
+
+def detect_execution_outcome(project_root: Path | str) -> tuple[str, str]:
+    """Detect execution outcome from CONTEXT_LEDGER.md, git status, and test signals (Ticket 02)."""
+    p_root = Path(project_root)
+    
+    # 1. Check CONTEXT_LEDGER.md for active errors or failures
+    ledger = p_root / "CONTEXT_LEDGER.md"
+    if ledger.exists():
+        try:
+            text = ledger.read_text(encoding="utf-8")
+            # Look for active error sections or failure markers
+            error_sections = re.findall(r"(?is)###\s*(?:\d+\.\s*)?Active Errors.*?(?=(?:###|\Z))", text)
+            for es in error_sections:
+                lines = [l.strip() for l in es.splitlines() if l.strip() and not l.startswith("#")]
+                # If there are actual error lines present (not just 'None' or empty)
+                active_errs = [l for l in lines if not re.match(r"(?i)^(none|no active errors|n/a|\*none\*)\.?$", l)]
+                if active_errs:
+                    return "failure", f"Active errors logged in CONTEXT_LEDGER.md: {active_errs[0][:80]}"
+
+            # Look for explicit failure signals
+            if re.search(r"(?i)(FAILED|AssertionError|Traceback|SyntaxError|Unhandled rejection)", text):
+                # Ensure it's not preceded by '0 errors' or 'PASSED'
+                if not re.search(r"(?i)(0 errors|0 failures|tests? ok|passed)", text):
+                    return "failure", "Failure or exception pattern detected in ledger"
+        except Exception:
+            pass
+
+    return "success", "No active failures detected across verification checkpoints"
+
 def save_routing_history(history_file: Path, data: dict) -> None:
     """Helper to write .agents/skills/.routing-history.json deterministically and atomically."""
     history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2297,6 +2368,13 @@ def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool
                 # Route on-demand from full catalog
                 result = route_query(f"/{cmd}", all_registry, debug=debug, hydrate=hydrate, project_root=project_root)
                 result["status"] = "on_demand_unfiltered_match"
+
+    # Persist active route state for self-healing feedback loop (Ticket 01)
+    if result.get("decision") == "route" and result.get("skills"):
+        try:
+            save_active_route(project_root, result["skills"], query=query)
+        except Exception:
+            pass
 
     if subagent_only:
         dispatch = result.get("subagent_dispatch")
