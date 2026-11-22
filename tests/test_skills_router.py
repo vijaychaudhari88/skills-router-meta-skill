@@ -1112,5 +1112,37 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
         self.assertFalse(res.get("context_used", False))
 
 
+
+    def test_multi_slash_command_routing(self):
+        """Verify that compound slash commands (/retro /code-review) route deterministically with 1.0 confidence."""
+        rec_retro = SkillRecord(
+            name="retro",
+            description="Retrospective on project milestones",
+            source_path="./.agents/skills/retro/SKILL.md",
+            scope="Project",
+            category="management",
+            priority=80,
+            commands=["/retro"]
+        )
+        rec_cr = SkillRecord(
+            name="code-review",
+            description="Code review against standards and spec",
+            source_path="./.agents/skills/cr/SKILL.md",
+            scope="Project",
+            category="review",
+            priority=90,
+            commands=["/code-review"]
+        )
+        registry = {"retro": rec_retro, "code-review": rec_cr}
+
+        # Compound slash command should produce multi_skill_plan at 1.0 confidence with zero ambiguity
+        res = route_query("/retro /code-review", registry)
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["status"], "multi_skill_plan")
+        self.assertEqual(res["confidence"], 1.0)
+        self.assertEqual(res["skills"], ["retro", "code-review"])
+        self.assertEqual(len(res["skills_summary"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

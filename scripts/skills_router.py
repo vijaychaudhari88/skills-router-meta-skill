@@ -1064,56 +1064,93 @@ def resolve_auto_context(project_root: Path | None = None) -> str:
 
     return ""
 
-def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None, context: str | None = None, auto_context: bool = False) -> dict:
+def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None, context: str | None = None, auto_context: bool = False, full_catalog: dict[str, SkillRecord] | None = None) -> dict:
     """Execute two-stage deterministic routing over the discovered skill registry."""
     raw_query = query.strip()
     
-    # 1. Match leading or embedded explicit slash commands (e.g. "/wayfinder" or "... \n/wayfinder")
-    embedded_slash = re.search(r"(?:^|\s)/([a-zA-Z0-9_-]+)(?:\s+|$)", raw_query)
-    if embedded_slash:
-        cmd_name = embedded_slash.group(1).lower()
-        
-        # Check direct skill name match or alias or command
-        matched_skill = None
-        if cmd_name in registry:
-            matched_skill = registry[cmd_name]
-        else:
-            for s in registry.values():
-                if cmd_name in [a.lower().lstrip('/') for a in s.aliases] or cmd_name in [c.lower().lstrip('/') for c in s.commands]:
-                    matched_skill = s
-                    break
-        
-        if matched_skill:
-            cand = ScoredCandidate(
-                skill=matched_skill,
-                cheap_score=1.0,
-                rank_score=1.0,
-                confidence=1.0,
-                evidence=[f"slash command '/{cmd_name}' matched skill '{matched_skill.name}'"]
-            )
-            summary = generate_skills_summary([cand])
-            cmd_val = matched_skill.commands[0] if matched_skill.commands else f"/{cmd_name}"
-            res = {
-                "decision": "route",
-                "status": "slash_command",
-                "skill": matched_skill.name,
-                "skills": [matched_skill.name],
-                "skills_summary": summary,
-                "skills_applied_text": format_skills_applied_markdown(summary),
-                "command": cmd_val,
-                "confidence": 1.0,
-                "evidence": f"slash command '/{cmd_name}' matched '{matched_skill.name}'",
-                "is_dormant": getattr(matched_skill, "is_dormant", False),
-                "validated": True,
-                "pipeline": build_pipeline_declaration([cand], query=query, registry=registry),
-                "debug": None
-            }
-            dispatch = build_subagent_dispatch([cand], query=query, registry=registry)
-            if dispatch:
-                res["subagent_dispatch"] = dispatch
-            if getattr(matched_skill, "is_dormant", False) or hydrate:
-                res["hydration"] = extract_hydration_payload(matched_skill, project_root, registry=registry)
-            return res
+    # 1. Match leading or embedded explicit slash commands (e.g. "/wayfinder" or "/retro /code-review")
+    slash_matches = re.findall(r"(?:^|\s)/([a-zA-Z0-9_-]+)(?=(?:\s+|$))", raw_query)
+    if slash_matches:
+        matched_candidates = []
+        effective_catalog = full_catalog or registry
+        seen_matched_skills = set()
+
+        def find_skill_by_command(c_name: str, reg: dict[str, SkillRecord]) -> SkillRecord | None:
+            c_low = c_name.lower().lstrip('/')
+            if c_low in reg:
+                return reg[c_low]
+            for s in reg.values():
+                if c_low in [a.lower().lstrip('/') for a in s.aliases] or c_low in [c.lower().lstrip('/') for c in s.commands]:
+                    return s
+            return None
+
+        for cmd_name in slash_matches:
+            # Check active profile registry first, then fallback to full catalog
+            matched_skill = find_skill_by_command(cmd_name, registry)
+            if not matched_skill and full_catalog:
+                matched_skill = find_skill_by_command(cmd_name, full_catalog)
+
+            if matched_skill and matched_skill.name not in seen_matched_skills:
+                seen_matched_skills.add(matched_skill.name)
+                matched_candidates.append(ScoredCandidate(
+                    skill=matched_skill,
+                    cheap_score=1.0,
+                    rank_score=1.0,
+                    confidence=1.0,
+                    evidence=[f"slash command '/{cmd_name}' matched skill '{matched_skill.name}'"]
+                ))
+
+        if matched_candidates:
+            if len(matched_candidates) == 1:
+                cand = matched_candidates[0]
+                matched_skill = cand.skill
+                summary = generate_skills_summary([cand])
+                cmd_val = matched_skill.commands[0] if matched_skill.commands else f"/{slash_matches[0]}"
+                res = {
+                    "decision": "route",
+                    "status": "slash_command",
+                    "context_used": False,
+                    "skill": matched_skill.name,
+                    "skills": [matched_skill.name],
+                    "skills_summary": summary,
+                    "skills_applied_text": format_skills_applied_markdown(summary),
+                    "command": cmd_val,
+                    "confidence": 1.0,
+                    "evidence": f"slash command '/{slash_matches[0]}' matched '{matched_skill.name}'",
+                    "is_dormant": getattr(matched_skill, "is_dormant", False),
+                    "validated": True,
+                    "pipeline": build_pipeline_declaration([cand], query=query, registry=effective_catalog),
+                    "debug": None
+                }
+                dispatch = build_subagent_dispatch([cand], query=query, registry=effective_catalog)
+                if dispatch:
+                    res["subagent_dispatch"] = dispatch
+                if getattr(matched_skill, "is_dormant", False) or hydrate:
+                    res["hydration"] = extract_hydration_payload(matched_skill, project_root, registry=effective_catalog)
+                return res
+            else:
+                # Multi-slash compound command plan (e.g. /retro /code-review)
+                skill_names = [c.skill.name for c in matched_candidates]
+                summary = generate_skills_summary(matched_candidates)
+                res = {
+                    "decision": "route",
+                    "status": "multi_skill_plan",
+                    "context_used": False,
+                    "skill": skill_names[0],
+                    "skills": skill_names,
+                    "skills_summary": summary,
+                    "skills_applied_text": format_skills_applied_markdown(summary),
+                    "command": matched_candidates[0].skill.commands[0] if matched_candidates[0].skill.commands else f"/{slash_matches[0]}",
+                    "confidence": 1.0,
+                    "evidence": "; ".join([f"slash command '/{c}'" for c in slash_matches]),
+                    "validated": True,
+                    "pipeline": build_pipeline_declaration(matched_candidates, query=query, registry=effective_catalog),
+                    "debug": None
+                }
+                dispatch = build_subagent_dispatch(matched_candidates, query=query, registry=effective_catalog)
+                if dispatch:
+                    res["subagent_dispatch"] = dispatch
+                return res
 
     # Resolve effective context (explicit or auto-context)
     effective_context = context or ""
@@ -2218,7 +2255,7 @@ def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool
     all_registry = discover_all_skills(project_root)
     profile = get_active_profile(project_root)
     registry = filter_skills_by_profile(all_registry, profile)
-    result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root, context=context, auto_context=auto_context)
+    result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root, context=context, auto_context=auto_context, full_catalog=all_registry)
     
     # On-demand fallback: if active profile didn't match, check if query named an explicit slash command in full catalog
     if result["decision"] == "no_route":
