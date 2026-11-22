@@ -1153,9 +1153,12 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                     res["subagent_dispatch"] = dispatch
                 return res
 
-    # Resolve effective context (explicit or auto-context)
+    # Resolve effective context: auto-resolve from CONTEXT_LEDGER.md by default if not provided
     effective_context = context or ""
-    if auto_context and not effective_context:
+    if not effective_context and auto_context:
+        effective_context = resolve_auto_context(project_root)
+    elif not effective_context and project_root is not None:
+        # Default auto-context resolution
         effective_context = resolve_auto_context(project_root)
     
     ctx_features = extract_context_features(effective_context)
@@ -1223,8 +1226,13 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 c_score += STAGE_A_WEIGHTS["keyword"]
                 break
 
-        # Elliptical query rescue: If query is terse (< 4 tokens), allow context tokens and indicators to contribute to Stage A
-        if len(req_tokens) <= 3 and context_tokens:
+        # Conversational continuation rescue:
+        # Trigger context rescue if:
+        # (a) Query has at least one partial hit on name/action/object/keyword (c_score > 0), OR
+        # (b) Query contains continuation cues ('it', 'this', 'that', 'fix', 'test', 'run', 'upgrade', 'continue', 'proceed', 'again', 'more', 'check', 'review'), OR
+        # (c) Query is terse (<= 3 tokens)
+        is_continuation_cue = bool(req_tokens & {"it", "this", "that", "fix", "test", "tests", "run", "upgrade", "continue", "proceed", "again", "more", "check", "review", "redo", "now", "yes"})
+        if context_tokens and (c_score > 0 or len(req_tokens) <= 3 or is_continuation_cue):
             for kw in skill.keywords:
                 if kw.lower() in context_tokens:
                     c_score += STAGE_A_WEIGHTS["keyword"] * 0.5
@@ -2493,7 +2501,8 @@ def main():
     route_p.add_argument("--hydrate", action="store_true", help="Include full on-demand skill instructions in output")
     route_p.add_argument("--subagent", action="store_true", help="Output only the subagent dispatch contract payload")
     route_p.add_argument("--context", "--prev-reply", default=None, help="Previous response or recent conversation context string (or - for stdin)")
-    route_p.add_argument("--auto-context", action="store_true", help="Auto-resolve recent context from CONTEXT_LEDGER.md")
+    route_p.add_argument("--auto-context", action="store_true", default=True, help="Auto-resolve recent context from CONTEXT_LEDGER.md (default: true)")
+    route_p.add_argument("--no-context", dest="auto_context", action="store_false", help="Disable automatic context resolution")
 
     # benchmark
     bench_p = subparsers.add_parser("benchmark", help="Run benchmark suite")
