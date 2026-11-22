@@ -1228,12 +1228,15 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 if kw.lower() in context_tokens:
                     c_score += STAGE_A_WEIGHTS["keyword"] * 0.5
                     break
+            ctx_raw = ctx_features.get("raw", "")
             for obj in skill.objects:
-                if obj.lower() in context_tokens:
+                obj_l = obj.lower()
+                if obj_l in context_tokens or obj_l in ctx_raw:
                     c_score += STAGE_A_WEIGHTS["object"] * 0.5
                     break
             for act in skill.actions:
-                if act.lower() in context_tokens:
+                act_l = act.lower()
+                if act_l in context_tokens or act_l in ctx_raw:
                     c_score += STAGE_A_WEIGHTS["action"] * 0.5
                     break
             ind = ctx_features.get("indicators", set())
@@ -1242,6 +1245,8 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             if "test" in ind and any(w in s_name or w in skill.category.lower() for w in ("test", "tdd", "verify")):
                 c_score += STAGE_A_WEIGHTS["trigger"] * 0.6
             if "review" in ind and any(w in s_name or w in skill.category.lower() for w in ("review", "cr", "audit")):
+                c_score += STAGE_A_WEIGHTS["trigger"] * 0.6
+            if "a11y" in ind and any(w in s_name or w in skill.category.lower() for w in ("a11y", "devtools", "chrome", "browser")):
                 c_score += STAGE_A_WEIGHTS["trigger"] * 0.6
 
         if c_score >= CONFIG["filter_floor"]:
