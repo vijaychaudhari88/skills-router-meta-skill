@@ -36,6 +36,7 @@ CONFIG = {
     "route_floor": 0.45,       # Min confidence to ROUTE
     "no_route_floor": 0.14,    # Below this is NO_ROUTE
     "ambiguity_gap": 0.15,     # Gap between 1st & 2nd candidate
+    "ambiguous_cap": 3,         # Max candidates to cluster in ambiguous decision
     "multi_floor": 0.30,       # Min confidence to join multi-skill plan
     "multi_cap": 4,            # Max skills in one plan
     "conflict_penalty": 0.30,  # Penalty for conflicting competitor
@@ -1560,10 +1561,19 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 res["hydration"] = extract_hydration_payload(winner.skill, project_root, registry=registry)
             return res
 
-    # AMBIGUOUS (Option A + Option B: Select top 3 winners with multi-skill plan and populated summaries)
+    # AMBIGUOUS (Option A + Option B: Dynamic score-gap clustering within ambiguity_gap)
     if winner.confidence >= CONFIG["no_route_floor"]:
         if second:
-            top_candidates = candidates[:3]
+            # Dynamic clustering: pick candidates within ambiguity_gap of winner, capped at ambiguous_cap
+            ambig_gap = CONFIG.get("ambiguity_gap", 0.15)
+            ambig_cap = CONFIG.get("ambiguous_cap", 3)
+            top_candidates = [
+                c for c in candidates[:ambig_cap]
+                if (winner.confidence - c.confidence) <= ambig_gap and c.confidence >= CONFIG["no_route_floor"]
+            ]
+            if len(top_candidates) < 2:
+                top_candidates = candidates[:2]
+
             top_names = [c.skill.name for c in top_candidates]
             summary = generate_skills_summary(top_candidates)
             applied_text = format_skills_applied_markdown(summary)
