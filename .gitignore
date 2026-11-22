@@ -27,3 +27,5 @@ skill-registry/
 SKILLS_REGISTRY.md
 .routing-history.json
 
+
+.env

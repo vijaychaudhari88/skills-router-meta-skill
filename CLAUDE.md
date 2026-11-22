@@ -15,3 +15,7 @@ Before running bash commands, editing code, or executing tasks:
 3. **Local Sovereignty:** Local project skills (`./.agents/skills/`, `./skills/`) strictly override global plugins (`~/.claude/skills/`).
 4. **Lifecycle & Dormancy:** Manage dormant skills with `python3 scripts/skills_router.py disable <id>` and `enable <id>`.
 <!-- skills-manager:routing-contract:end -->
+
+## Token Optimization: pxpipe
+- Proxy address: `http://127.0.0.1:47821`
+- Activate: `source ~/.pxpipe-helpers.sh && pxpipe-on`

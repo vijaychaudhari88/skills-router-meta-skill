@@ -15,3 +15,9 @@ Before modifying code, designing architecture, or executing sub-tasks:
 3. **Local Sovereignty:** Skills in `./.agents/skills/` and `./skills/` take absolute precedence over global runtime plugins.
 4. **Lifecycle & Dormancy:** Manage dormant skills via `python3 scripts/skills_router.py disable <skill-id>` and `enable <skill-id>`.
 <!-- skills-manager:routing-contract:end -->
+
+## Token & Context Optimization: pxpipe
+When routing through `pxpipe` (`http://127.0.0.1:47821`):
+- Ensure loopback exclusion is active: `NO_PROXY="localhost,127.0.0.1,::1,127.0.0.0/8,*.local,*.internal"`
+- Control via `source ~/.pxpipe-helpers.sh && pxpipe-on` / `pxpipe-off` / `pxpipe-status`.
+- Review metrics: `http://127.0.0.1:47821/` or `pxpipe stats`.
