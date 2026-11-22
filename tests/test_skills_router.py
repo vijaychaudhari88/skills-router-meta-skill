@@ -173,6 +173,13 @@ class TestDeterministicRouting(unittest.TestCase):
         self.assertEqual(res["decision"], "ambiguous")
         self.assertIn("frontend-design", res["alternatives"])
         self.assertIn("hallmark", res["alternatives"])
+        # Verify Option A + Option B: top winners populated with summaries and pipeline
+        self.assertIn("top_winners", res)
+        self.assertEqual(len(res["top_winners"]), 2)
+        self.assertIn("skills_summary", res)
+        self.assertEqual(len(res["skills_summary"]), 2)
+        self.assertIn("pipeline", res)
+        self.assertIn("Phase 4 (Verification)", res["pipeline"])
 
     def test_no_route_on_irrelevant_query(self):
         res = route_query("what is the weather in Mumbai today?", self.mock_registry)
@@ -1142,6 +1149,10 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
         self.assertEqual(res["confidence"], 1.0)
         self.assertEqual(res["skills"], ["retro", "code-review"])
         self.assertEqual(len(res["skills_summary"]), 2)
+
+
+
+
 
 
 if __name__ == "__main__":

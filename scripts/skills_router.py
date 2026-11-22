@@ -1560,26 +1560,33 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
                 res["hydration"] = extract_hydration_payload(winner.skill, project_root, registry=registry)
             return res
 
-    # AMBIGUOUS
+    # AMBIGUOUS (Option A + Option B: Select top 3 winners with multi-skill plan and populated summaries)
     if winner.confidence >= CONFIG["no_route_floor"]:
         if second:
-            alt_names = [c.skill.name for c in candidates[:3]]
-            return {
+            top_candidates = candidates[:3]
+            top_names = [c.skill.name for c in top_candidates]
+            summary = generate_skills_summary(top_candidates)
+            applied_text = format_skills_applied_markdown(summary)
+            composite_pipeline = build_pipeline_declaration(top_candidates, query=query, registry=registry)
+
+            res = {
                 "decision": "ambiguous",
                 "status": "ambiguous",
                 "context_used": context_used,
-                "skill": None,
-                "skills": alt_names,
-                "skills_summary": [],
-                "skills_applied_text": "",
-                "command": None,
+                "skill": winner.skill.name,
+                "skills": top_names,
+                "top_winners": top_names,
+                "skills_summary": summary,
+                "skills_applied_text": applied_text,
+                "command": winner.skill.commands[0] if winner.skill.commands else None,
                 "confidence": round(winner.confidence, 3),
                 "evidence": f"near tie between {winner.skill.name} ({round(winner.confidence, 2)}) and {second.skill.name} ({round(second.confidence, 2)})",
-                "alternatives": alt_names,
+                "alternatives": top_names,
                 "validated": False,
-                "pipeline": {},
+                "pipeline": composite_pipeline,
                 "debug": [format_cand(c) for c in candidates[:5]] if debug else None
             }
+            return res
         else:
             # Single candidate with moderate confidence (between no_route_floor and route_floor)
             cmd = winner.skill.commands[0] if winner.skill.commands else None
