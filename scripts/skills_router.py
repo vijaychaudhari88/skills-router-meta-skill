@@ -41,6 +41,9 @@ CONFIG = {
     "conflict_penalty": 0.30,  # Penalty for conflicting competitor
     "not_when_penalty": 0.60,  # Soft penalty for negative trigger match
     "not_when_disqualify": 0.15, # Hard disqualification multiplier
+    "context_weight": 0.25,        # Max weight contribution from previous context
+    "context_max_chars": 1500,     # Max characters of context to inspect for performance
+    "context_divergence_floor": 0.50, # Suppress context if primary query confidence >= floor
 }
 
 STAGE_A_WEIGHTS = {
@@ -1003,7 +1006,65 @@ def extract_hydration_payload(
             
     return payload
 
-def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None) -> dict:
+
+def extract_context_features(context_text: str) -> dict[str, any]:
+    """Extract technical entities, indicators, and tokens from previous response/context."""
+    if not context_text:
+        return {"tokens": set(), "indicators": set(), "has_error": False, "has_test": False}
+    
+    snippet = context_text[:CONFIG.get("context_max_chars", 1500)].lower()
+    tokens = set(tokenize(snippet))
+    
+    # Domain technical indicators
+    has_error = bool(re.search(r"\b(error|fail|failed|failure|exception|traceback|syntaxerror|typeerror|bug|broken)\b", snippet))
+    has_test = bool(re.search(r"\b(test|tests|unittest|vitest|jest|pytest|assert|assertion|specs|spec)\b", snippet))
+    has_review = bool(re.search(r"\b(review|findings|audit|linter|eslint|ocr|cr)\b", snippet))
+    has_build = bool(re.search(r"\b(build|compile|compilation|tsc|webpack|vite|rollup)\b", snippet))
+    has_a11y = bool(re.search(r"\b(wcag|a11y|accessibility|contrast|aria|tap target)\b", snippet))
+
+    indicators = set()
+    if has_error: indicators.add("error")
+    if has_test: indicators.add("test")
+    if has_review: indicators.add("review")
+    if has_build: indicators.add("build")
+    if has_a11y: indicators.add("a11y")
+
+    return {
+        "tokens": tokens,
+        "indicators": indicators,
+        "has_error": has_error,
+        "has_test": has_test,
+        "has_review": has_review,
+        "has_build": has_build,
+        "has_a11y": has_a11y,
+        "raw": snippet
+    }
+
+def resolve_auto_context(project_root: Path | None = None) -> str:
+    """Auto-resolve recent context from CONTEXT_LEDGER.md or recent history."""
+    if project_root is None:
+        project_root = Path(".").resolve()
+    
+    # 1. Look for CONTEXT_LEDGER.md
+    ledger_path = project_root / "CONTEXT_LEDGER.md"
+    if ledger_path.exists():
+        try:
+            content = ledger_path.read_text(encoding="utf-8")
+            # Grab recent errors, active signatures, or pending checklists
+            sections = re.findall(r"(?s)(###\s+\d+\.\s+.*?)(?=(?:###\s+\d+\.)|\Z)", content)
+            if sections:
+                # Return active errors or first section
+                for sec in sections:
+                    if "error" in sec.lower() or "stack" in sec.lower():
+                        return sec[:CONFIG.get("context_max_chars", 1500)]
+                return sections[-1][:CONFIG.get("context_max_chars", 1500)]
+            return content[:CONFIG.get("context_max_chars", 1500)]
+        except Exception:
+            pass
+
+    return ""
+
+def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = False, hydrate: bool = False, project_root: Path | None = None, context: str | None = None, auto_context: bool = False) -> dict:
     """Execute two-stage deterministic routing over the discovered skill registry."""
     raw_query = query.strip()
     
@@ -1053,6 +1114,15 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             if getattr(matched_skill, "is_dormant", False) or hydrate:
                 res["hydration"] = extract_hydration_payload(matched_skill, project_root, registry=registry)
             return res
+
+    # Resolve effective context (explicit or auto-context)
+    effective_context = context or ""
+    if auto_context and not effective_context:
+        effective_context = resolve_auto_context(project_root)
+    
+    ctx_features = extract_context_features(effective_context)
+    context_tokens = ctx_features["tokens"]
+    context_used = False
 
     req_tokens = set(tokenize(query))
     if not req_tokens:
@@ -1114,6 +1184,28 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             if phrase_matches(kw, query_lower):
                 c_score += STAGE_A_WEIGHTS["keyword"]
                 break
+
+        # Elliptical query rescue: If query is terse (< 4 tokens), allow context tokens and indicators to contribute to Stage A
+        if len(req_tokens) <= 3 and context_tokens:
+            for kw in skill.keywords:
+                if kw.lower() in context_tokens:
+                    c_score += STAGE_A_WEIGHTS["keyword"] * 0.5
+                    break
+            for obj in skill.objects:
+                if obj.lower() in context_tokens:
+                    c_score += STAGE_A_WEIGHTS["object"] * 0.5
+                    break
+            for act in skill.actions:
+                if act.lower() in context_tokens:
+                    c_score += STAGE_A_WEIGHTS["action"] * 0.5
+                    break
+            ind = ctx_features.get("indicators", set())
+            if "error" in ind and any(w in s_name or w in skill.category.lower() for w in ("debug", "diagnos", "fix", "troubleshoot")):
+                c_score += STAGE_A_WEIGHTS["trigger"] * 0.6
+            if "test" in ind and any(w in s_name or w in skill.category.lower() for w in ("test", "tdd", "verify")):
+                c_score += STAGE_A_WEIGHTS["trigger"] * 0.6
+            if "review" in ind and any(w in s_name or w in skill.category.lower() for w in ("review", "cr", "audit")):
+                c_score += STAGE_A_WEIGHTS["trigger"] * 0.6
 
         if c_score >= CONFIG["filter_floor"]:
             candidates.append(ScoredCandidate(skill=skill, cheap_score=c_score))
@@ -1246,8 +1338,40 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         elif name_score == 1.0 and len(req_tokens) <= 3:
             raw_conf = max(raw_conf, 0.65)
 
-        cand.rank_score = raw_conf
-        cand.confidence = raw_conf
+        # -------------------------------------------------------------------
+        # Context Ingestion & Blending (75/25 Stage-B scoring blend)
+        # -------------------------------------------------------------------
+        context_boost = 0.0
+        if context_tokens:
+            # Check divergence: if standalone query confidence is already strong (>= 0.50), suppress context
+            if raw_conf < CONFIG.get("context_divergence_floor", 0.50):
+                ctx_matches = 0
+                for kw in s.keywords:
+                    if kw.lower() in context_tokens:
+                        ctx_matches += 1
+                for obj in s.objects:
+                    if obj.lower() in context_tokens:
+                        ctx_matches += 1
+                
+                # Indicator alignment (e.g. error in context aligns with debugging/diagnosing)
+                ind = ctx_features.get("indicators", set())
+                if "error" in ind and any(w in s.name.lower() or w in s.category.lower() for w in ("debug", "diagnos", "fix", "troubleshoot")):
+                    ctx_matches += 2
+                if "test" in ind and any(w in s.name.lower() or w in s.category.lower() for w in ("test", "tdd", "audit", "verify")):
+                    ctx_matches += 2
+                if "review" in ind and any(w in s.name.lower() or w in s.category.lower() for w in ("review", "cr", "audit")):
+                    ctx_matches += 2
+                if "a11y" in ind and any(w in s.name.lower() for w in ("a11y", "devtools", "chrome")):
+                    ctx_matches += 2
+
+                if ctx_matches > 0:
+                    context_boost = min(CONFIG.get("context_weight", 0.25), 0.08 * ctx_matches)
+                    cand.evidence.append(f"context_match (+{context_boost:.2f})")
+                    context_used = True
+
+        final_conf = raw_conf + context_boost
+        cand.rank_score = final_conf
+        cand.confidence = final_conf
         cand.evidence = evidence_parts
         cand.components = components
 
@@ -1347,6 +1471,7 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
         res = {
             "decision": "route",
             "status": "multi_skill_plan",
+            "context_used": context_used,
             "skill": skill_names[0],
             "skills": skill_names,
             "skills_summary": summary,
@@ -1372,6 +1497,7 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             res = {
                 "decision": "route",
                 "status": "dormant_match" if is_dormant else "matched",
+                "context_used": context_used,
                 "skill": winner.skill.name,
                 "skills": [winner.skill.name],
                 "skills_summary": summary,
@@ -1393,28 +1519,59 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             return res
 
     # AMBIGUOUS
-    if winner.confidence >= CONFIG["no_route_floor"] and second:
-        alt_names = [c.skill.name for c in candidates[:3]]
-        return {
-            "decision": "ambiguous",
-            "status": "ambiguous",
-            "skill": None,
-            "skills": alt_names,
-            "skills_summary": [],
-            "skills_applied_text": "",
-            "command": None,
-            "confidence": round(winner.confidence, 3),
-            "evidence": f"near tie between {winner.skill.name} ({round(winner.confidence, 2)}) and {second.skill.name} ({round(second.confidence, 2)})",
-            "alternatives": alt_names,
-            "validated": False,
-            "pipeline": {},
-            "debug": [format_cand(c) for c in candidates[:5]] if debug else None
-        }
+    if winner.confidence >= CONFIG["no_route_floor"]:
+        if second:
+            alt_names = [c.skill.name for c in candidates[:3]]
+            return {
+                "decision": "ambiguous",
+                "status": "ambiguous",
+                "context_used": context_used,
+                "skill": None,
+                "skills": alt_names,
+                "skills_summary": [],
+                "skills_applied_text": "",
+                "command": None,
+                "confidence": round(winner.confidence, 3),
+                "evidence": f"near tie between {winner.skill.name} ({round(winner.confidence, 2)}) and {second.skill.name} ({round(second.confidence, 2)})",
+                "alternatives": alt_names,
+                "validated": False,
+                "pipeline": {},
+                "debug": [format_cand(c) for c in candidates[:5]] if debug else None
+            }
+        else:
+            # Single candidate with moderate confidence (between no_route_floor and route_floor)
+            cmd = winner.skill.commands[0] if winner.skill.commands else None
+            summary = generate_skills_summary([winner])
+            is_dormant = getattr(winner.skill, "is_dormant", False)
+            res = {
+                "decision": "route",
+                "status": "dormant_match" if is_dormant else "matched",
+                "context_used": context_used,
+                "skill": winner.skill.name,
+                "skills": [winner.skill.name],
+                "skills_summary": summary,
+                "skills_applied_text": format_skills_applied_markdown(summary),
+                "command": cmd,
+                "confidence": round(winner.confidence, 3),
+                "evidence": "; ".join(winner.evidence),
+                "alternative": None,
+                "is_dormant": is_dormant,
+                "validated": bool(cmd),
+                "pipeline": build_pipeline_declaration([winner], query=query, registry=registry),
+                "debug": [format_cand(c) for c in candidates[:5]] if debug else None
+            }
+            dispatch = build_subagent_dispatch([winner], query=query, registry=registry)
+            if dispatch:
+                res["subagent_dispatch"] = dispatch
+            if is_dormant or hydrate:
+                res["hydration"] = extract_hydration_payload(winner.skill, project_root, registry=registry)
+            return res
 
     # NO_ROUTE
     return {
         "decision": "no_route",
         "status": "no_match",
+        "context_used": context_used,
         "skill": None,
         "skills": [],
         "skills_summary": [],
@@ -2057,11 +2214,11 @@ def cmd_session_start(target_dir: Path, cleanup: bool = False) -> int:
     print(receipt)
     return 0
 
-def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False, subagent_only: bool = False) -> int:
+def cmd_route(query: str, project_root: Path, debug: bool = False, hydrate: bool = False, subagent_only: bool = False, context: str | None = None, auto_context: bool = False) -> int:
     all_registry = discover_all_skills(project_root)
     profile = get_active_profile(project_root)
     registry = filter_skills_by_profile(all_registry, profile)
-    result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root)
+    result = route_query(query, registry, debug=debug, hydrate=hydrate, project_root=project_root, context=context, auto_context=auto_context)
     
     # On-demand fallback: if active profile didn't match, check if query named an explicit slash command in full catalog
     if result["decision"] == "no_route":
@@ -2276,6 +2433,8 @@ def main():
     route_p.add_argument("--debug", action="store_true", help="Print debug score breakdown")
     route_p.add_argument("--hydrate", action="store_true", help="Include full on-demand skill instructions in output")
     route_p.add_argument("--subagent", action="store_true", help="Output only the subagent dispatch contract payload")
+    route_p.add_argument("--context", "--prev-reply", default=None, help="Previous response or recent conversation context string (or - for stdin)")
+    route_p.add_argument("--auto-context", action="store_true", help="Auto-resolve recent context from CONTEXT_LEDGER.md")
 
     # benchmark
     bench_p = subparsers.add_parser("benchmark", help="Run benchmark suite")
@@ -2375,7 +2534,13 @@ def main():
     if args.command == "sync":
         sys.exit(cmd_sync(root))
     elif args.command == "route":
-        sys.exit(cmd_route(args.query, root, debug=args.debug, hydrate=args.hydrate, subagent_only=args.subagent))
+        ctx_in = args.context
+        if ctx_in == "-":
+            try:
+                ctx_in = sys.stdin.read()
+            except Exception:
+                ctx_in = None
+        sys.exit(cmd_route(args.query, root, debug=args.debug, hydrate=args.hydrate, subagent_only=args.subagent, context=ctx_in, auto_context=args.auto_context))
     elif args.command == "benchmark":
         sys.exit(cmd_benchmark(root))
     elif args.command == "profile" or args.command == "surface":

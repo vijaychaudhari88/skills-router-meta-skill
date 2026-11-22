@@ -1056,5 +1056,61 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
 
 
 
+
+    def test_context_aware_routing_and_boost(self):
+        """Verify that previous response context boosts relevant skills and marks context_used."""
+        rec_tdd = SkillRecord(
+            name="test-driven-development",
+            description="Test-driven development workflow",
+            source_path="./.agents/skills/tdd/SKILL.md",
+            scope="Project",
+            category="testing",
+            priority=80,
+            keywords=["tdd", "test", "unittest"],
+            objects=["test", "unit test", "suite"],
+            actions=["test", "assert", "refactor"]
+        )
+        rec_gen = SkillRecord(
+            name="generalist-tool",
+            description="Generic utility",
+            source_path="./.agents/skills/gen/SKILL.md",
+            scope="Project",
+            category="utility",
+            priority=10
+        )
+        registry = {"test-driven-development": rec_tdd, "generalist-tool": rec_gen}
+
+        # 1. Without context: 'write tests' produces baseline
+        res_no_ctx = route_query("write tests", registry)
+        
+        # 2. With context mentioning test failure: boosts score and flags context_used
+        ctx_text = "Error in test suite: 2 assertions failed in test_api.py"
+        res_with_ctx = route_query("write tests", registry, context=ctx_text)
+
+        self.assertTrue(res_with_ctx.get("context_used"))
+        self.assertGreater(res_with_ctx["confidence"], res_no_ctx["confidence"])
+        self.assertIn("test-driven-development", res_with_ctx.get("skills", []))
+
+    def test_context_divergence_suppression(self):
+        """Verify that strong standalone query ignores divergent prior context."""
+        rec_tdd = SkillRecord(
+            name="test-driven-development",
+            description="Test-driven development workflow",
+            source_path="./.agents/skills/tdd/SKILL.md",
+            scope="Project",
+            category="testing",
+            priority=80,
+            keywords=["tdd", "test"],
+            commands=["/tdd"]
+        )
+        registry = {"test-driven-development": rec_tdd}
+
+        # Explicit slash command should NOT be contaminated by unrelated previous context
+        res = route_query("/tdd", registry, context="Unrelated frontend css layout question")
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["skill"], "test-driven-development")
+        self.assertFalse(res.get("context_used", False))
+
+
 if __name__ == "__main__":
     unittest.main()
