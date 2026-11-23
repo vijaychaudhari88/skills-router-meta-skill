@@ -5,10 +5,12 @@
 ---
 
 ### 1. Created / Modified File Paths
-- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Core routing, composition, cycle protection, subagent synthesis, atomic history writing, resilient XML parsing, and pre-computed normalized name variants.
-- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): Comprehensive test suite (37 unit tests, including OCR slash/alias tests).
-- [`.agents/skills/open-code-review-delegate/SKILL.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.agents/skills/open-code-review-delegate/SKILL.md): Alibaba Open Code Review delegation mode skill specification (`/ocr-review`, `/ocr`).
-- [`.scratch/skill-composition-delegation/map.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/.scratch/skill-composition-delegation/map.md): Completed composition map (Tickets 01–04).
+- [`scripts/skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/scripts/skills_router.py): Core routing engine, multi-slash parsing, score-gap clustering, active-route persistence, outcome detection, `auto-record` CLI command, and harness template synchronization.
+- [`tests/test_skills_router.py`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/tests/test_skills_router.py): Full automated test suite (42 unit tests passing).
+- [`README.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/README.md): Self-healing feedback loop documentation, auto-record CLI specs, and benchmark metrics.
+- [`AGENTS.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/AGENTS.md), [`CLAUDE.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/CLAUDE.md), [`GEMINI.md`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/GEMINI.md): Phase 4 verification auto-record contracts.
+- [`templates/harnesses/`](file:///data/user/0/ai.antigem/files/home/projects/skills-router-meta-skill/templates/harnesses/): Upstream distribution templates for all 7 agent harnesses.
+- Target projects updated: `/data/user/0/ai.antigem/files/home/projects/Dairy-Sathi-v5` and `/data/user/0/ai.antigem/files/home/projects/Dairy Sathi 2.0 Simple`.
 
 ---
 
@@ -17,91 +19,54 @@
 ```python
 # scripts/skills_router.py
 
-@dataclass
-class SkillRecord:
-    name: str
-    description: str
-    source_path: str
-    scope: str
-    category: str
-    priority: int
-    is_override: bool = False
-    is_disabled: bool = False
-    is_dormant: bool = False
-    aliases: list[str] = field(default_factory=list)
-    keywords: list[str] = field(default_factory=list)
-    capabilities: list[str] = field(default_factory=list)
-    use_when: list[str] = field(default_factory=list)
-    not_when: list[str] = field(default_factory=list)
-    objects: list[str] = field(default_factory=list)
-    actions: list[str] = field(default_factory=list)
-    conflicts_with: list[str] = field(default_factory=list)
-    domains: list[str] = field(default_factory=list)
-    commands: list[str] = field(default_factory=list)
-    signatures: list[str] = field(default_factory=list)
-    involves: list[str] = field(default_factory=list)
-    delegates_to: list[str] = field(default_factory=list)
-    intents: dict[str, list[str]] = field(default_factory=dict)
-    normalized_name: str = ""
-    normalized_spaced_name: str = ""
+def get_active_route_file(project_root: Path | str) -> Path:
+    """Return path to .agents/skills/.active-route.json."""
 
-def save_routing_history(history_file: Path, data: dict) -> None:
-    """Atomic write via .tmp and replace for .routing-history.json."""
+def save_active_route(project_root: Path | str, skills: list[str], query: str | None = None) -> None:
+    """Atomically record in-flight routed skills for execution outcome detection."""
 
-def resolve_skill_dependencies(
-    skill_name: str,
-    registry: dict[str, SkillRecord],
-    visited: set[str] | None = None,
-    depth: int = 0,
-    max_depth: int = 3
-) -> tuple[list[SkillRecord], list[str]]:
-    """Traverse involved dependencies with cycle detection (visited set) and max depth <= 3."""
+def load_active_route(project_root: Path | str) -> dict | None:
+    """Load current active route state if present."""
 
-def build_pipeline_declaration(
-    selected_candidates: list[ScoredCandidate],
-    query: str = "",
-    registry: dict[str, SkillRecord] | None = None
-) -> dict:
-    """Stage expanded candidate + involved skills into Phase 1-4 with subagent offload."""
+def clear_active_route(project_root: Path | str) -> bool:
+    """Remove active route state file after recording outcome."""
 
-def build_subagent_dispatch(
-    selected_candidates: list[ScoredCandidate],
-    query: str = "",
-    registry: dict[str, SkillRecord] | None = None
-) -> dict | None:
-    """Generate structured subagent dispatch payload for heavy skills & delegated skills."""
+def detect_execution_outcome(project_root: Path | str) -> tuple[str, str]:
+    """Inspect CONTEXT_LEDGER.md, active errors, and verification checkpoints to return ('success'|'failure', reason)."""
+
+def cmd_auto_record(project_root: Path | str, force_outcome: str | None = None) -> int:
+    """Auto-record execution feedback for the currently active route and calibrate empirical weights."""
 ```
 
 ---
 
 ### 3. Active Errors & Stack Traces
 - **None.** All 42 unit tests PASS cleanly in ~2.67s.
-- Benchmark: 4/4 queries PASS in ~55ms (~13.76ms/query, SLA < 35ms).
+- Benchmark: 4/4 queries PASS in ~90ms (~22.6ms/query, SLA < 35ms).
 
 ---
 
 ### 4. Architectural Decisions & Constraints
 1. **Pure Standard Library Invariant:** No external pip dependencies.
-2. **Dual-Mode Composition Extraction:** Supports declarative YAML (`involves:`, `delegates_to:`) and prose regex scanning (`call the Skill tool with "..."`).
-3. **Cycle Guard:** Cycle prevention via `visited: set[str]` and recursion depth cap ($\le 3$) emitting warnings in `decl["composition_warnings"]`.
-4. **Decision Triad:** `route` (matched skill/plan), `ambiguous` (clarify alternatives), `no_route` (generalist engineering).
-5. **Alibaba Open Code Review Integration & Remediation:** Fully integrated delegation mode (`open-code-review-delegate`), fixed all code review findings (atomic feedback writes, XML error shielding, pre-computed string variants), 37 tests passing.
+2. **Self-Healing Routing Feedback Loop (`auto-record`):** Automated bridge between Phase 4 verification and Stage B empirical calibration without manual intervention.
+3. **Multi-Slash Parsing & Disjoint Plans:** Disjoint capabilities extracted from composite commands (e.g. `/implement /tdd`) into consolidated 4-phase pipelines.
+4. **Dynamic Score-Gap Clustering:** Ambiguous decisions clustered within `ambiguity_gap = 0.15` and capped at `ambiguous_cap = 3`.
+5. **Universal Multi-Harness Sync:** 100% idempotent updates across Claude Code, Gemini/Antigravity, Cursor, Windsurf, Roo/Cline, and Aider.
 
 ---
 
-### 5. Pending Task Checklist
-- [x] Ticket 01: Metadata Schema & Parser Extension (involves, delegates_to)
-- [x] Ticket 02: Recursive Pipeline & Cycle Protection Engine
-- [x] Ticket 03: Subagent Delegation Mapping & Contract Synthesis
-- [x] Ticket 04: Test Suite & End-to-End Verification (37 tests)
-- [x] Alibaba Open Code Review full repository audit executed (100% coverage)
-- [x] All OCR remediation items implemented & verified
-- [x] Commit & push to `origin/main` (`68e0044`)
-- [ ] Ready for user's next directive.
+### 5. Completed Tasks
+- [x] Ticket #01: Active Route State Persistence (`.active-route.json`)
+- [x] Ticket #02: Context Ledger Outcome Detection Engine
+- [x] Ticket #03: `auto-record` CLI Subcommand & Calibration Flow
+- [x] Ticket #04: Harness Contracts & Unit Test Suite (42/42 tests passing)
+- [x] Documentation: Updated `README.md` with complete CLI & feedback specifications
+- [x] Distribution: Synchronized, installed, and initialized in all existing projects (`Dairy-Sathi-v5`, `Dairy Sathi 2.0 Simple`)
+- [x] Git sync: Clean working directory committed and pushed to `origin/main` (`81f7ad7`)
 
 ---
 
 ### 6. Operational Rules
-- Local repository precedence over global plugins.
+- Local repository precedence (`.agents/skills/`) over global plugins.
 - Pre-flight routing query before non-trivial steps.
 - Scoped caveman / ultra-terse prose reporting.
