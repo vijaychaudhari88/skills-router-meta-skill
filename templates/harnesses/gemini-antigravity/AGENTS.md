@@ -14,4 +14,9 @@ Before modifying code, designing architecture, or executing sub-tasks:
    - **`no_route`**: No specialized skill matched. Proceed with standard generalist reasoning without hallucinating skill activations.
 3. **Local Sovereignty:** Skills in `./.agents/skills/` and `./skills/` take absolute precedence over global runtime plugins.
 4. **Lifecycle & Dormancy:** Manage dormant skills via `python3 scripts/skills_router.py disable <skill-id>` and `enable <skill-id>`.
+5. **Self-Healing Feedback Loop (Phase 4):**
+   In Phase 4 (Verification), auto-record task execution outcome to calibrate skill routing weights:
+   ```bash
+   python3 scripts/skills_router.py auto-record
+   ```
 <!-- skills-manager:routing-contract:end -->

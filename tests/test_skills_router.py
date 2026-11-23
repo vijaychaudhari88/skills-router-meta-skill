@@ -1193,6 +1193,49 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
             clear_active_route(proj)
             self.assertIsNone(load_active_route(proj))
 
+    def test_auto_record_command_and_lifecycle(self):
+        """Ticket 03 & 04: Test cmd_auto_record lifecycle, outcome override, and history recording."""
+        from skills_router import (
+            save_active_route,
+            load_active_route,
+            load_routing_history,
+            cmd_auto_record
+        )
+
+        with tempfile.TemporaryDirectory(prefix="auto_rec_") as tmp_dir:
+            proj = Path(tmp_dir)
+
+            # Case 1: No active route -> returns 0 gracefully
+            self.assertEqual(cmd_auto_record(proj), 0)
+
+            # Case 2: Active route exists, ledger indicates success
+            save_active_route(proj, ["test-driven-development", "chisle"], "implement tdd feature")
+            ledger = proj / "CONTEXT_LEDGER.md"
+            ledger.write_text("# Context Ledger\n### Active Status\nStep verification PASSED\n", encoding="utf-8")
+
+            res = cmd_auto_record(proj)
+            self.assertEqual(res, 0)
+
+            # Active route should now be cleared
+            self.assertIsNone(load_active_route(proj))
+
+            # History should have both skills recorded as success
+            _, hist = load_routing_history(proj)
+            self.assertEqual(hist["skills"]["test-driven-development"]["success"], 1)
+            self.assertEqual(hist["skills"]["test-driven-development"]["failure"], 0)
+            self.assertEqual(hist["skills"]["chisle"]["success"], 1)
+            self.assertEqual(hist["skills"]["chisle"]["failure"], 0)
+
+            # Case 3: Force outcome override (e.g. failure) even if ledger is clean
+            save_active_route(proj, ["test-driven-development"], "verify retry logic")
+            res_fail = cmd_auto_record(proj, force_outcome="failure")
+            self.assertEqual(res_fail, 0)
+            self.assertIsNone(load_active_route(proj))
+
+            _, hist2 = load_routing_history(proj)
+            self.assertEqual(hist2["skills"]["test-driven-development"]["success"], 1)
+            self.assertEqual(hist2["skills"]["test-driven-development"]["failure"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

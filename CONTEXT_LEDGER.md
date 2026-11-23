@@ -75,7 +75,7 @@ def build_subagent_dispatch(
 ---
 
 ### 3. Active Errors & Stack Traces
-- **None.** All 37 unit tests PASS cleanly in ~2.58s.
+- **None.** All 42 unit tests PASS cleanly in ~2.67s.
 - Benchmark: 4/4 queries PASS in ~55ms (~13.76ms/query, SLA < 35ms).
 
 ---

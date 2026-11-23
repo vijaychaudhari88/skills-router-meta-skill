@@ -2007,8 +2007,13 @@ def detect_execution_outcome(project_root: Path | str) -> tuple[str, str]:
             error_sections = re.findall(r"(?is)###\s*(?:\d+\.\s*)?Active Errors.*?(?=(?:###|\Z))", text)
             for es in error_sections:
                 lines = [l.strip() for l in es.splitlines() if l.strip() and not l.startswith("#")]
-                # If there are actual error lines present (not just 'None' or empty)
-                active_errs = [l for l in lines if not re.match(r"(?i)^(none|no active errors|n/a|\*none\*)\.?$", l)]
+                # Filter out markers that indicate no errors, e.g. - **None.**, None, No active errors, pass benchmarks
+                active_errs = [
+                    l for l in lines
+                    if not re.match(r"(?i)^[-*•\s]*(?:\*\*)?(?:none|no active errors|n/a|\*none\*)[.:*]*", l)
+                    and not re.search(r"(?i)\b(0 errors|0 failures|pass cleanly|tests ok|queries pass|benchmark)\b", l)
+                    and re.search(r"(?i)\b(error|failed|failure|traceback|syntaxerror|exception|regression|broken)\b", l)
+                ]
                 if active_errs:
                     return "failure", f"Active errors logged in CONTEXT_LEDGER.md: {active_errs[0][:80]}"
 
@@ -2060,6 +2065,38 @@ def cmd_record(skill_id: str, outcome: str, project_root: Path | str, query: str
     rate = (record["success"] / total) * 100.0 if total > 0 else 0.0
     status_label = "✔ Recorded SUCCESS" if is_success else "✘ Recorded FAILURE"
     print(f"{status_label} for '{skill_id}': {record['success']}/{total} successful ({rate:.1f}% rate)")
+    return 0
+
+def cmd_auto_record(project_root: Path | str, force_outcome: str | None = None) -> int:
+    """Auto-record execution feedback for the currently active route in .agents/skills/.active-route.json."""
+    p_root = Path(project_root)
+    active = load_active_route(p_root)
+    if not active or not active.get("skills"):
+        print("ℹ No active route in progress. Nothing to auto-record.")
+        return 0
+
+    skills = active["skills"]
+    query = active.get("query")
+
+    if force_outcome:
+        norm = force_outcome.strip().lower()
+        if norm in ("success", "pass", "1"):
+            outcome = "success"
+            reason = "manually overridden to success"
+        elif norm in ("failure", "fail", "0"):
+            outcome = "failure"
+            reason = "manually overridden to failure"
+        else:
+            outcome, reason = detect_execution_outcome(p_root)
+    else:
+        outcome, reason = detect_execution_outcome(p_root)
+
+    print(f"🔄 Auto-Recording feedback for {len(skills)} skill(s) [Outcome: {outcome.upper()}] (Reason: {reason})")
+    for s_id in skills:
+        cmd_record(s_id, outcome, p_root, query=query)
+
+    clear_active_route(p_root)
+    print("✔ Active route cleared.")
     return 0
 
 def cmd_stats(project_root: Path) -> int:
@@ -2664,6 +2701,10 @@ def main():
     rec_p.add_argument("--query", "-q", default=None, help="Optional task query string")
     rec_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
 
+    auto_rec_p = subparsers.add_parser("auto-record", help="Auto-record execution feedback for in-flight active route")
+    auto_rec_p.add_argument("--outcome", "-o", default=None, choices=["success", "failure", "auto"], help="Override outcome detection (default: auto)")
+    auto_rec_p.add_argument("--root", "--target", dest="root", default=".", help="Project root or target directory")
+
     feed_p = subparsers.add_parser("feedback", help="Alias for record / show execution statistics")
     feed_p.add_argument("skill_id", nargs="?", default=None, help="Skill identifier (optional if viewing stats)")
     feed_p.add_argument("outcome", nargs="?", default=None, help="Execution outcome: success or failure")
@@ -2707,6 +2748,9 @@ def main():
         sys.exit(cmd_session_start(root, cleanup=args.cleanup))
     elif args.command == "record":
         sys.exit(cmd_record(args.skill_id, args.outcome, root, query=args.query))
+    elif args.command == "auto-record":
+        force_out = None if args.outcome == "auto" else args.outcome
+        sys.exit(cmd_auto_record(root, force_outcome=force_out))
     elif args.command == "feedback":
         if args.show or (args.skill_id is None and args.outcome is None):
             sys.exit(cmd_stats(root))
