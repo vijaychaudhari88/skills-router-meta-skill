@@ -815,10 +815,13 @@ def build_pipeline_declaration(
     registry: dict[str, SkillRecord] | None = None
 ) -> dict:
     """Format canonical 4-phase execution pipeline, expanding involved skills dynamically."""
-    guardrails = ["using-superpowers", "agent-memory-discipline", "tokenleak"]
+    default_guardrails = ["using-superpowers", "agent-memory-discipline", "tokenleak"]
+    guardrails = [g for g in default_guardrails if not registry or g in registry]
+    if not guardrails:
+        guardrails = ["using-superpowers"]
     pre_exec = []
     exec_skills = []
-    verify_skills = ["verification-before-completion"]
+    verify_skills = [v for v in ["verification-before-completion"] if not registry or v in registry]
     subagent_offload = []
     
     # 1. Expand dependencies for candidates if registry is provided
@@ -1492,22 +1495,29 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     seen_skills = set()
     seen_categories = set()
     seen_objects = set()
+    seen_actions = set()
     for cand in candidates:
         if cand.confidence >= CONFIG["multi_floor"] and len(multi_plan) < CONFIG["multi_cap"]:
             s_name = cand.skill.name
             cat = cand.skill.category
             cand_obj = cand.matched_object
+            cand_act = cand.matched_action
             if s_name not in seen_skills:
                 # Disallow conflicting skills in one plan
                 if any(other.skill.name in cand.skill.conflicts_with for other in multi_plan):
                     continue
-                # Join if category is unique OR matched distinct object
-                if cat not in seen_categories or (cand_obj and cand_obj not in seen_objects):
+                # Join if category is unique OR matched distinct object OR matched distinct imperative action
+                distinct_category = cat not in seen_categories
+                distinct_object = bool(cand_obj and cand_obj not in seen_objects)
+                distinct_action = bool(cand_act and cand_act not in seen_actions)
+                if distinct_category or distinct_object or distinct_action:
                     multi_plan.append(cand)
                     seen_skills.add(s_name)
                     seen_categories.add(cat)
                     if cand_obj:
                         seen_objects.add(cand_obj)
+                    if cand_act:
+                        seen_actions.add(cand_act)
 
     # -----------------------------------------------------------------------
     # Decision Formation
@@ -1515,8 +1525,18 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
     raw_words = set(re.findall(r"[a-z0-9&]+", query_lower))
     has_conjunction = bool(raw_words & {"and", "then", "with", "plus", "also", "&"})
 
+    # Recognize serial-comma imperative clauses (e.g., 'audit X, review Y, verify Z, and prepare PR' or '..., and...')
+    has_serial_comma = False
+    comma_parts = [p.strip() for p in query.split(",") if p.strip()]
+    if len(comma_parts) >= 3:
+        has_serial_comma = True
+    elif len(comma_parts) >= 2 and any(re.search(r"\b(?:and|then|plus|also)\b", cp, re.I) for cp in comma_parts[1:]):
+        has_serial_comma = True
+
+    is_multi_facet_query = has_conjunction or has_serial_comma
+
     # Check for multi-skill plan first if task explicitly connects multiple facets
-    if len(multi_plan) >= 2 and has_conjunction:
+    if len(multi_plan) >= 2 and is_multi_facet_query:
         skill_names = [m.skill.name for m in multi_plan]
         summary = generate_skills_summary(multi_plan)
         res = {

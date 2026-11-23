@@ -1236,6 +1236,90 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
             self.assertEqual(hist2["skills"]["test-driven-development"]["success"], 1)
             self.assertEqual(hist2["skills"]["test-driven-development"]["failure"], 1)
 
+    def test_serial_comma_multi_facet_routing(self):
+        """Test that comma-delimited serial imperative clauses route to multi_skill_plan."""
+        from skills_router import route_query, SkillRecord
+
+        mock_registry = {
+            "a11y-debugging": SkillRecord(
+                name="a11y-debugging",
+                description="audit accessibility, touch targets, and contrast",
+                source_path="s",
+                scope="global",
+                category="3. Debugging & Verification",
+                priority=80,
+                actions=["audit"],
+                keywords=["audit", "viewport", "touch", "targets"],
+                intents={"audit": ["audit mobile viewport", "touch targets"]}
+            ),
+            "code-review": SkillRecord(
+                name="code-review",
+                description="review code changes for quality and security",
+                source_path="s",
+                scope="global",
+                category="3. Debugging & Verification",
+                priority=80,
+                actions=["review"],
+                keywords=["review", "security", "changes"],
+                intents={"review": ["review code security"]}
+            ),
+            "test-driven-development": SkillRecord(
+                name="test-driven-development",
+                description="unit tests test-first red green refactor",
+                source_path="s",
+                scope="global",
+                category="2. Implementation",
+                priority=90,
+                actions=["test"],
+                keywords=["unit", "tests", "strict"],
+                intents={"test": ["run strict unit tests"]}
+            )
+        }
+
+        # Query with serial-comma imperative clauses and single trailing and
+        query = "audit mobile viewport touch targets, review code security, and run strict unit tests"
+        res = route_query(query, mock_registry, project_root=Path("."))
+        self.assertEqual(res["decision"], "route")
+        self.assertEqual(res["status"], "multi_skill_plan")
+        self.assertGreaterEqual(len(res["skills"]), 2)
+
+    def test_ghost_skills_filtering_in_pipeline_declaration(self):
+        """Test that build_pipeline_declaration filters out ghost/uninstalled skills."""
+        from skills_router import build_pipeline_declaration, ScoredCandidate, SkillRecord
+
+        cand_skill = SkillRecord(
+            name="test-driven-development",
+            description="TDD",
+            source_path="s",
+            scope="global",
+            category="2. Implementation",
+            priority=90
+        )
+        cand = ScoredCandidate(
+            skill=cand_skill,
+            confidence=0.8,
+            evidence=["test"],
+            cheap_score=0.9
+        )
+        # Mock registry missing 'agent-memory-discipline' and 'tokenleak'
+        mock_registry = {
+            "test-driven-development": cand_skill,
+            "verification-before-completion": SkillRecord(
+                name="verification-before-completion",
+                description="verify",
+                source_path="s",
+                scope="project",
+                category="3. Debugging & Verification",
+                priority=100
+            )
+        }
+        decl = build_pipeline_declaration([cand], query="run tests", registry=mock_registry)
+        # Ghost skills not in mock_registry should be pruned from Phase 1
+        self.assertNotIn("agent-memory-discipline", decl["Phase 1 (Guardrails)"])
+        self.assertNotIn("tokenleak", decl["Phase 1 (Guardrails)"])
+        # Phase 4 should retain verification-before-completion
+        self.assertIn("verification-before-completion", decl["Phase 4 (Verification)"])
+
 
 if __name__ == "__main__":
     unittest.main()
