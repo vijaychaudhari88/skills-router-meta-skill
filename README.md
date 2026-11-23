@@ -24,6 +24,8 @@ Synthesizes the non-vectorized Agentic Search and progressive disclosure protoco
 - **Precedence Hierarchy:** Project-level skills (`./.agents/skills/`, `./skills/`) strictly override global plugins (`~/.gemini/`, `~/.claude/`).
 - **Canonical 4-Phase Pipeline:** Formats every selected skill set into:
   $$\text{Phase 1: Guardrails} \longrightarrow \text{Phase 2: Pre-Execution} \longrightarrow \text{Phase 3: Execution (TDD)} \longrightarrow \text{Phase 4: Verification}$$
+- **Self-Healing Routing Feedback Loop (`auto-record`):** In Phase 4 (Verification), the agent calls `skills-router auto-record`. The router reads in-flight active route state (`.active-route.json`), inspects checkpoints/ledger outcome, updates empirical calibration history atomically (`.routing-history.json`), and boosts or dampens skill weights dynamically.
+- **Context-Aware Continuation & Multi-Slash Chains:** Intelligently resolves multi-slash prompt commands (e.g. `/implement /tdd #03 #04`) and preserves conversational continuity without context revocation.
 
 ---
 
@@ -138,26 +140,29 @@ python3 scripts/skills_router.py session-start [--cleanup] [--target <path>]
 # 8. Run the calibrated benchmark suite
 python3 scripts/skills_router.py benchmark
 
-# 9. Record task execution feedback for empirical calibration (Action 2)
+# 9. Auto-record task execution outcome for in-flight active route (Self-Healing Feedback)
+python3 scripts/skills_router.py auto-record [--outcome <auto|success|failure>]
+
+# 10. Record task execution feedback for empirical calibration manually
 python3 scripts/skills_router.py record <skill-id> --outcome <success|failure> [--query "<task>"]
 
-# 10. View empirical skill execution statistics
+# 11. View empirical skill execution statistics
 python3 scripts/skills_router.py stats
 python3 scripts/skills_router.py feedback --show
 
-# 11. List all discovered skills, categories, scopes, and overrides
+# 12. List all discovered skills, categories, scopes, and overrides
 python3 scripts/skills_router.py list
 
-# 12. Disable a dormant or legacy skill (renames SKILL.md -> SKILL.md.disabled)
+# 13. Disable a dormant or legacy skill (renames SKILL.md -> SKILL.md.disabled)
 python3 scripts/skills_router.py disable <skill-id>
 
-# 13. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
+# 14. Enable a dormant skill (renames SKILL.md.disabled -> SKILL.md)
 python3 scripts/skills_router.py enable <skill-id>
 
-# 14. Install or update harness contracts for all 7 major agent harnesses
+# 15. Install or update harness contracts for all 7 major agent harnesses
 python3 scripts/skills_router.py install-harness all [--target <path>]
 
-# 15. Install integration for a specific harness (e.g. cursor, claude, windsurf)
+# 16. Install integration for a specific harness (e.g. cursor, claude, windsurf)
 python3 scripts/skills_router.py install-harness cursor --target .
 ```
 
@@ -237,9 +242,9 @@ skills-router-meta-skill/
 │   └── skills-manager/
 │       └── SKILL.md                 # The Canonical Meta-Skill Specification
 ├── scripts/
-│   └── skills_router.py             # Two-Stage Deterministic CLI Router
+│   └── skills_router.py             # Two-Stage Deterministic CLI Router (Sub-35ms)
 ├── tests/
-│   └── test_skills_router.py        # Automated Unit & Integration Tests (11/11 passing)
+│   └── test_skills_router.py        # Automated Unit & Integration Tests (42/42 passing)
 └── templates/
     ├── AGENTS.md.snippet            # Universal trigger fence for agent prompts
     ├── example_skill/
