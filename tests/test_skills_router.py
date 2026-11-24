@@ -1320,6 +1320,27 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
         # Phase 4 should retain verification-before-completion
         self.assertIn("verification-before-completion", decl["Phase 4 (Verification)"])
 
+    def test_resolve_auto_context_fallback_chain(self):
+        """Test fallback chain when CONTEXT_LEDGER.md is stale or missing."""
+        from skills_router import resolve_auto_context, save_active_route
+
+        with tempfile.TemporaryDirectory(prefix="ctx_fallback_") as tmp_dir:
+            proj = Path(tmp_dir)
+
+            # Case 1: No ledger, no git, no active route -> empty string
+            self.assertEqual(resolve_auto_context(proj), "")
+
+            # Case 2: In-flight active route query fallback
+            save_active_route(proj, ["a11y-debugging"], "audit touch target contrast WCAG on login form")
+            ctx2 = resolve_auto_context(proj)
+            self.assertIn("touch target contrast WCAG", ctx2)
+
+            # Case 3: Fresh CONTEXT_LEDGER.md overrides active route fallback
+            ledger = proj / "CONTEXT_LEDGER.md"
+            ledger.write_text("# Context Ledger\n### 3. Active Errors\nTypeError: null pointer in AuthGuard\n", encoding="utf-8")
+            ctx3 = resolve_auto_context(proj)
+            self.assertIn("TypeError: null pointer", ctx3)
+
 
 if __name__ == "__main__":
     unittest.main()

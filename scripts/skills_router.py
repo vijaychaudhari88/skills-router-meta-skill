@@ -1045,11 +1045,17 @@ def extract_context_features(context_text: str) -> dict[str, any]:
     }
 
 def resolve_auto_context(project_root: Path | None = None) -> str:
-    """Auto-resolve recent context from CONTEXT_LEDGER.md or recent history."""
+    """Auto-resolve recent context using a multi-tiered fallback chain:
+    1. Fresh CONTEXT_LEDGER.md (active errors, signatures, or checklists).
+    2. In-flight active route state (.agents/skills/.active-route.json).
+    3. Live Git modifications and recent commit subject.
+    """
     if project_root is None:
         project_root = Path(".").resolve()
     
-    # 1. Look for CONTEXT_LEDGER.md
+    max_chars = CONFIG.get("context_max_chars", 1500)
+
+    # 1. Tier 1: Look for CONTEXT_LEDGER.md
     ledger_path = project_root / "CONTEXT_LEDGER.md"
     if ledger_path.exists():
         try:
@@ -1060,11 +1066,62 @@ def resolve_auto_context(project_root: Path | None = None) -> str:
                 # Return active errors or first section
                 for sec in sections:
                     if "error" in sec.lower() or "stack" in sec.lower():
-                        return sec[:CONFIG.get("context_max_chars", 1500)]
-                return sections[-1][:CONFIG.get("context_max_chars", 1500)]
-            return content[:CONFIG.get("context_max_chars", 1500)]
+                        res = sec[:max_chars].strip()
+                        if res:
+                            return res
+                res = sections[-1][:max_chars].strip()
+                if res:
+                    return res
+            res = content[:max_chars].strip()
+            if res:
+                return res
         except Exception:
             pass
+
+    # 2. Tier 2: Fallback to in-flight active route query
+    active_route = load_active_route(project_root)
+    if active_route and active_route.get("query"):
+        q = active_route["query"].strip()
+        skills = " ".join(active_route.get("skills", []))
+        return f"Active in-flight task: {q} (Routed skills: {skills})"[:max_chars]
+
+    # 3. Tier 3: Fallback to live git status and recent commit context
+    try:
+        git_dir = project_root / ".git"
+        if git_dir.exists():
+            import subprocess
+            proc_st = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            modified_files = []
+            if proc_st.returncode == 0 and proc_st.stdout:
+                for line in proc_st.stdout.splitlines()[:10]:
+                    parts = line.strip().split(None, 1)
+                    if len(parts) == 2:
+                        modified_files.append(parts[1])
+
+            proc_log = subprocess.run(
+                ["git", "log", "-1", "--pretty=%s"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            last_commit = proc_log.stdout.strip() if proc_log.returncode == 0 else ""
+
+            parts = []
+            if modified_files:
+                parts.append(f"Modified files: {', '.join(modified_files)}")
+            if last_commit:
+                parts.append(f"Recent commit: {last_commit}")
+            if parts:
+                return " | ".join(parts)[:max_chars]
+    except Exception:
+        pass
 
     return ""
 
