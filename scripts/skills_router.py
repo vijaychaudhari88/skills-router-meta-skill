@@ -2612,6 +2612,10 @@ def inject_or_create(target_path: Path, template_text: str) -> str:
     begin_marker = "<!-- skills-manager:routing-contract:begin -->"
     end_marker = "<!-- skills-manager:routing-contract:end -->"
 
+    if target_path.is_dir():
+        # Handle case where target is a directory (e.g. .clinerules/ or .cursorrules/ directory structure)
+        target_path = target_path / "skills-router.md"
+
     target_path.parent.mkdir(parents=True, exist_ok=True)
     if not target_path.exists():
         target_path.write_text(template_text, encoding="utf-8")
