@@ -1,0 +1,78 @@
+{
+  "manifest_version": 3,
+  "id": "skills-router",
+  "name": "Skills Router Meta-Skill",
+  "version": "1.0.0",
+  "description": "Deterministic skills router for AI coding agents: route tasks, manage dormant skills, and run the 4-phase execution pipeline.",
+  "background": {
+    "service_worker": "worker.js",
+    "type": "module"
+  },
+  "mcp_tools": [
+    {
+      "name": "list_skills",
+      "description": "Discover project skills from YAML frontmatter without reading full bodies.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "description": "Project root path (default: terminal home)"
+          }
+        }
+      }
+    },
+    {
+      "name": "read_skill",
+      "description": "Read the full SKILL.md body of a routed skill (progressive disclosure on demand).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "skill_id": {
+            "type": "string",
+            "description": "Skill identifier (file name without .md)"
+          },
+          "root": {
+            "type": "string",
+            "description": "Project root path (default: terminal home)"
+          }
+        },
+        "required": ["skill_id"]
+      }
+    },
+    {
+      "name": "route",
+      "description": "Route a task query to the optimal skill(s) via the deterministic router (runs on host via shell).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Task description to route"
+          },
+          "root": {
+            "type": "string",
+            "description": "Project root path (default: terminal home)"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "dormancy_check",
+      "description": "Check dormant/active status of all skills in .agents/skills/ or ./skills/.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string",
+            "description": "Project root path (default: terminal home)"
+          }
+        }
+      }
+    }
+  ],
+  "permissions": ["antigemFiles"],
+  "host_permissions": ["<all_urls>"],
+  "icon": "icon.svg"
+}

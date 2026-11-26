@@ -1,0 +1,13 @@
+{
+  "name": "skills-router plugins",
+  "plugins": [
+    {
+      "path": "skills-router-plugin",
+      "id": "skills-router",
+      "name": "Skills Router Meta-Skill",
+      "version": "1.0.0",
+      "description": "Deterministic skills router for AI coding agents: route tasks, manage dormant skills, and run the 4-phase execution pipeline.",
+      "icon": "icon.svg"
+    }
+  ]
+}
