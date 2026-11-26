@@ -182,26 +182,8 @@ CATEGORY_MAP = {
     "to-spec": "1. Planning",
     "to-tickets": "1. Planning",
     "to-questionnaire": "1. Planning",
-    "master-implementation-planning": "1. Planning",
-    "master-prd-engineering": "1. Planning",
-    "idea-to-blueprint": "1. Planning",
-    "planning-and-task-breakdown": "1. Planning",
-    "architecture-decision-records": "1. Planning",
-    "senior-architect": "1. Planning",
-    "product-manager-toolkit": "1. Planning",
-    "spec-driven-development": "1. Planning",
-    "to-prd": "1. Planning",
 
     # 2. Implementation
-    "frontend-architecture": "2. Implementation",
-    "frontend-data-contracts": "2. Implementation",
-    "frontend-design": "2. Implementation",
-    "design-taste-frontend": "2. Implementation",
-    "tailwind-patterns": "2. Implementation",
-    "react-best-practices": "2. Implementation",
-    "zod-validation-expert": "2. Implementation",
-    "zustand-store-ts": "2. Implementation",
-    "clean-code": "2. Implementation",
     "modern-web-guidance": "2. Implementation",
     "chrome-extensions": "2. Implementation",
     "gemini-api-dev": "2. Implementation",
@@ -219,29 +201,14 @@ CATEGORY_MAP = {
     "cookie-debugging": "3. Debugging & Verification",
     "debug-optimize-lcp": "3. Debugging & Verification",
     "memory-leak-debugging": "3. Debugging & Verification",
-    "code-review-and-quality": "3. Debugging & Verification",
-    "code-review-checklist": "3. Debugging & Verification",
     "receiving-code-review": "3. Debugging & Verification",
     "requesting-code-review": "3. Debugging & Verification",
-    "frontend-lighthouse": "3. Debugging & Verification",
-    "performance-optimization": "3. Debugging & Verification",
 
     # 4. Token Economy
-    "agent-memory-discipline": "4. Token Economy",
-    "tokenleak": "4. Token Economy",
     "context-compression": "4. Token Economy",
     "context-degradation": "4. Token Economy",
-    "context-engineering": "4. Token Economy",
-    "context-window-management": "4. Token Economy",
-    "geminiignore-finops": "4. Token Economy",
-    "zipai-optimizer": "4. Token Economy",
-    "corpus-reconciliation-synthesis": "4. Token Economy",
-    "deep-research": "4. Token Economy",
 
     # 5. Domain & Infrastructure
-    "dairy-agritech-domain": "5. Domain & Infrastructure",
-    "database-design": "5. Domain & Infrastructure",
-    "progressive-web-app": "5. Domain & Infrastructure",
     "android-cli": "5. Domain & Infrastructure",
     "android-device-hub": "5. Domain & Infrastructure",
     "compose-preview": "5. Domain & Infrastructure",
@@ -257,8 +224,6 @@ CATEGORY_MAP = {
     "finishing-a-development-branch": "6. Meta & Authoring",
     "subagent-driven-development": "6. Meta & Authoring",
     "using-git-worktrees": "6. Meta & Authoring",
-    "multi-agent-task-orchestrator": "6. Meta & Authoring",
-    "documentation-templates": "6. Meta & Authoring",
 }
 
 # ---------------------------------------------------------------------------
@@ -508,36 +473,11 @@ def extract_metadata(skill_file: Path) -> dict:
             pass
 
     # 3. Seed domain-specific heuristic tags for Dairy Sathi V5
-    if name == "dairy-agritech-domain":
-        data["objects"].extend(["milk", "cow", "buffalo", "cattle", "gestation", "snf", "fat", "insemination", "calving", "evp", "vaccine", "pregnancy", "breeding"])
-        data["actions"].extend(["calculate", "verify", "gate", "formula", "quarantine", "lock", "record", "breed"])
-        data["domains"].extend(["agritech", "biology", "dairy"])
-        data["use_when"].extend(["biological calculation", "gestation window", "snf formula", "milk withdrawal", "pregnancy check", "cattle breeding", "breeding cycle"])
-        data["intents"]["gestation"] = ["calculate gestation", "gestation window", "pregnancy check date", "calving date"]
-        data["intents"]["snf"] = ["snf calculation", "richmond formula", "fat snf rate"]
-        data["intents"]["breeding"] = ["cattle breeding", "breeding cycle", "breeding tables"]
-    elif name in ("frontend-design", "design-taste-frontend"):
-        data["objects"].extend(["screen", "view", "ui", "modal", "card", "typography", "palette", "sunlight", "night vision", "landing page", "layout"])
-        data["actions"].extend(["design", "style", "layout", "wireframe", "beautify", "redesign"])
-        data["domains"].extend(["ui", "frontend", "ergonomics", "design"])
-        data["use_when"].extend(["design new ui", "barn ergonomics", "sunlight mode", "touch target", "redesign layout", "landing page"])
-        data["intents"]["redesign"] = ["redesign landing page", "redesign layout", "new page design"]
-    elif name == "hallmark":
+    if name == "hallmark":
         data["objects"].extend(["website", "page", "landing page", "layout", "theme"])
         data["actions"].extend(["design", "redesign", "build"])
         data["domains"].extend(["design", "ui"])
         data["use_when"].extend(["redesign landing page", "design website", "new page design"])
-    elif name == "zod-validation-expert":
-        data["objects"].extend(["schema", "form", "validation", "input", "error", "zod"])
-        data["actions"].extend(["validate", "refine", "bind", "check"])
-        data["domains"].extend(["data", "form", "validation"])
-        data["use_when"].extend(["form validation", "zod schema", "input validation"])
-    elif name == "database-design":
-        data["objects"].extend(["dexie", "indexeddb", "database", "table", "tables", "store", "index", "persistence", "storage", "migration", "schema"])
-        data["actions"].extend(["persist", "store", "save", "query", "migrate", "migration"])
-        data["domains"].extend(["database", "offline", "storage"])
-        data["use_when"].extend(["dexie persistence", "indexeddb store", "database table", "dexie migration", "schema migration"])
-        data["intents"]["migration"] = ["dexie migration", "schema migration", "database migration"]
     elif name in ("chrome-devtools", "a11y-debugging"):
         data["objects"].extend(["browser", "dom", "touch target", "wcag", "contrast", "console", "viewport", "mobile viewport"])
         data["actions"].extend(["test", "inspect", "audit", "automate", "verify", "screenshot"])
@@ -548,11 +488,6 @@ def extract_metadata(skill_file: Path) -> dict:
         data["actions"].extend(["test", "assert", "red", "green", "refactor", "run tests"])
         data["domains"].extend(["testing", "tdd"])
         data["use_when"].extend(["tdd unit tests", "write tests first", "test-driven development", "strict tdd"])
-    elif name == "progressive-web-app":
-        data["objects"].extend(["pwa", "service worker", "workbox", "cache", "offline", "manifest"])
-        data["actions"].extend(["cache", "offline", "sync", "install"])
-        data["domains"].extend(["pwa", "offline", "web"])
-        data["use_when"].extend(["offline pwa", "service worker cache", "offline support"])
     elif name == "skills-manager":
         data["objects"].extend(["skill", "skills", "registry", "router", "manifest", "profile", "lifecycle"])
         data["actions"].extend(["route", "sync", "disable", "enable", "profile", "surface", "benchmark", "deduplicate"])
@@ -815,7 +750,7 @@ def build_pipeline_declaration(
     registry: dict[str, SkillRecord] | None = None
 ) -> dict:
     """Format canonical 4-phase execution pipeline, expanding involved skills dynamically."""
-    default_guardrails = ["using-superpowers", "agent-memory-discipline", "tokenleak"]
+    default_guardrails = ["using-superpowers"]
     guardrails = [g for g in default_guardrails if not registry or g in registry]
     if not guardrails:
         guardrails = ["using-superpowers"]
@@ -1683,33 +1618,22 @@ def route_query(query: str, registry: dict[str, SkillRecord], debug: bool = Fals
             }
             return res
         else:
-            # Single candidate with moderate confidence (between no_route_floor and route_floor)
-            cmd = winner.skill.commands[0] if winner.skill.commands else None
-            summary = generate_skills_summary([winner])
-            is_dormant = getattr(winner.skill, "is_dormant", False)
-            res = {
-                "decision": "route",
-                "status": "dormant_match" if is_dormant else "matched",
+            # Single candidate below route_floor (0.45) -> NO_ROUTE per Decision Triad
+            return {
+                "decision": "no_route",
+                "status": "below_floor",
                 "context_used": context_used,
-                "skill": winner.skill.name,
-                "skills": [winner.skill.name],
-                "skills_summary": summary,
-                "skills_applied_text": format_skills_applied_markdown(summary),
-                "command": cmd,
+                "skill": None,
+                "skills": [],
+                "skills_summary": [],
+                "skills_applied_text": "",
+                "command": None,
                 "confidence": round(winner.confidence, 3),
-                "evidence": "; ".join(winner.evidence),
-                "alternative": None,
-                "is_dormant": is_dormant,
-                "validated": bool(cmd),
-                "pipeline": build_pipeline_declaration([winner], query=query, registry=registry),
+                "evidence": f"best score {round(winner.confidence, 2)} below route_floor {CONFIG['route_floor']}",
+                "validated": False,
+                "pipeline": {},
                 "debug": [format_cand(c) for c in candidates[:5]] if debug else None
             }
-            dispatch = build_subagent_dispatch([winner], query=query, registry=registry)
-            if dispatch:
-                res["subagent_dispatch"] = dispatch
-            if is_dormant or hydrate:
-                res["hydration"] = extract_hydration_payload(winner.skill, project_root, registry=registry)
-            return res
 
     # NO_ROUTE
     return {
@@ -2012,6 +1936,38 @@ def save_loaded_meta(meta_file: Path, data: dict) -> None:
     """Helper to write .agents/skills/.loaded.json deterministically."""
     meta_file.parent.mkdir(parents=True, exist_ok=True)
     meta_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def load_idle_state(project_root: Path | str) -> dict:
+    """Helper to read .agents/skills/.idle-state.json safely.
+
+    Returns per-skill idle counters: { skill_id: { idle_turns, loaded_at,
+    pinned, last_used } }. Returns {} when absent or corrupt.
+    """
+    p_root = Path(project_root)
+    agents_skills_dir = p_root / ".agents" / "skills"
+    idle_file = agents_skills_dir / ".idle-state.json"
+    if not idle_file.exists():
+        return {}
+    try:
+        parsed = json.loads(idle_file.read_text(encoding="utf-8"))
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    return {}
+
+
+def save_idle_state(project_root: Path | str, data: dict) -> None:
+    """Helper to write .agents/skills/.idle-state.json deterministically."""
+    p_root = Path(project_root)
+    agents_skills_dir = p_root / ".agents" / "skills"
+    idle_file = agents_skills_dir / ".idle-state.json"
+    idle_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = idle_file.with_name(f"{idle_file.name}.tmp")
+    tmp_file.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_file.replace(idle_file)
+
 
 def load_routing_history(project_root: Path | str) -> tuple[Path, dict]:
     """Helper to read .agents/skills/.routing-history.json safely."""

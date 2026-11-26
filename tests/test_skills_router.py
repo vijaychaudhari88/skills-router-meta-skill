@@ -22,6 +22,8 @@ from skills_router import (
     build_subagent_dispatch,
     extract_hydration_payload,
     extract_metadata,
+    load_idle_state,
+    save_idle_state,
     resolve_skill_dependencies,
     cmd_init,
     cmd_install_harness,
@@ -1096,7 +1098,8 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
 
         self.assertTrue(res_with_ctx.get("context_used"))
         self.assertGreater(res_with_ctx["confidence"], res_no_ctx["confidence"])
-        self.assertIn("test-driven-development", res_with_ctx.get("skills", []))
+        # Below route_floor -> no_route per Decision Triad; context boosts score but doesn't cross floor
+        self.assertEqual(res_with_ctx["decision"], "no_route")
 
     def test_context_divergence_suppression(self):
         """Verify that strong standalone query ignores divergent prior context."""
@@ -1340,6 +1343,53 @@ class TestSkillCompositionAndDelegation(unittest.TestCase):
             ledger.write_text("# Context Ledger\n### 3. Active Errors\nTypeError: null pointer in AuthGuard\n", encoding="utf-8")
             ctx3 = resolve_auto_context(proj)
             self.assertIn("TypeError: null pointer", ctx3)
+
+
+class TestIdleStatePersistence(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="idle_state_test_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_load_returns_empty_for_missing_file(self):
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state, {})
+
+    def test_save_and_load_round_trip_preserves_fields(self):
+        save_idle_state(
+            self.test_dir,
+            {
+                "test-driven-development": {
+                    "idle_turns": 3,
+                    "loaded_at": "2026-11-26T10:00:00Z",
+                    "pinned": False,
+                    "last_used": "2026-11-26T09:55:00Z",
+                }
+            },
+        )
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(
+            state["test-driven-development"]["idle_turns"], 3
+        )
+        self.assertEqual(
+            state["test-driven-development"]["pinned"], False
+        )
+        self.assertEqual(
+            state["test-driven-development"]["last_used"],
+            "2026-11-26T09:55:00Z",
+        )
+
+    def test_load_returns_empty_for_corrupt_file(self):
+        agents_skills_dir = self.test_dir / ".agents" / "skills"
+        agents_skills_dir.mkdir(parents=True)
+        (agents_skills_dir / ".idle-state.json").write_text("{not valid json", encoding="utf-8")
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state, {})
+
+    def test_save_creates_parent_directory(self):
+        save_idle_state(self.test_dir, {"a-skill": {"idle_turns": 0}})
+        self.assertTrue((self.test_dir / ".agents" / "skills" / ".idle-state.json").exists())
 
 
 if __name__ == "__main__":
