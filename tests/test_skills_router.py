@@ -18,11 +18,20 @@ from skills_router import (
     PROFILES,
     ScoredCandidate,
     SkillRecord,
+    auto_unload_idle_skills,
+    auto_load_on_route,
     build_pipeline_declaration,
     build_subagent_dispatch,
+    cmd_load,
+    cmd_profile,
+    cmd_route,
+    cmd_session_start,
     extract_hydration_payload,
     extract_metadata,
+    generate_registry_lines,
+    increment_idle_turns,
     load_idle_state,
+    reconcile_dormancy,
     save_idle_state,
     resolve_skill_dependencies,
     cmd_init,
@@ -1390,6 +1399,353 @@ class TestIdleStatePersistence(unittest.TestCase):
     def test_save_creates_parent_directory(self):
         save_idle_state(self.test_dir, {"a-skill": {"idle_turns": 0}})
         self.assertTrue((self.test_dir / ".agents" / "skills" / ".idle-state.json").exists())
+
+
+class TestTurnIncrementLogic(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="turn_increment_test_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_unused_skill_counter_increments(self):
+        save_idle_state(
+            self.test_dir,
+            {
+                "skill-a": {"idle_turns": 0, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+                "skill-b": {"idle_turns": 1, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+            },
+        )
+        increment_idle_turns(self.test_dir, used_skills=[])
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["skill-a"]["idle_turns"], 1)
+        self.assertEqual(state["skill-b"]["idle_turns"], 2)
+
+    def test_used_skill_counter_resets_to_zero(self):
+        save_idle_state(
+            self.test_dir,
+            {
+                "skill-a": {"idle_turns": 4, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+                "skill-b": {"idle_turns": 0, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+            },
+        )
+        increment_idle_turns(self.test_dir, used_skills=["skill-a"])
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["skill-a"]["idle_turns"], 0)
+        self.assertEqual(state["skill-b"]["idle_turns"], 1)
+
+    def test_pinned_skill_counter_increments_but_not_unloaded(self):
+        save_idle_state(
+            self.test_dir,
+            {
+                "skill-a": {"idle_turns": 6, "loaded_at": "t0", "pinned": True, "last_used": "t0"},
+            },
+        )
+        increment_idle_turns(self.test_dir, used_skills=[])
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["skill-a"]["idle_turns"], 7)
+
+
+class TestAutoLoadOnRoute(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="autoload_test_"))
+        (self.test_dir / ".agents" / "skills").mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_auto_load_records_idle_entry_at_zero(self):
+        # Skill already enabled (SKILL.md present) but not in idle-state
+        skill_dir = self.test_dir / ".agents" / "skills" / "test-driven-development"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: test-driven-development\n---\nBody", encoding="utf-8")
+
+        result = auto_load_on_route(
+            self.test_dir, "test-driven-development", is_dormant=False
+        )
+
+        self.assertTrue(result["loaded"])
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["test-driven-development"]["idle_turns"], 0)
+        self.assertEqual(state["test-driven-development"]["pinned"], False)
+
+    def test_auto_load_skips_when_already_in_idle_state(self):
+        save_idle_state(
+            self.test_dir,
+            {
+                "test-driven-development": {
+                    "idle_turns": 3,
+                    "loaded_at": "t0",
+                    "pinned": False,
+                    "last_used": "t0",
+                }
+            },
+        )
+        result = auto_load_on_route(self.test_dir, "test-driven-development", is_dormant=False)
+
+        self.assertFalse(result["loaded"])
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["test-driven-development"]["idle_turns"], 3)
+
+
+class TestAutoUnloadIdleSkills(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="autounload_test_"))
+        self.skills_dir = self.test_dir / ".agents" / "skills"
+        self.skills_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _make_skill(self, name: str) -> Path:
+        skill_dir = self.skills_dir / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\nBody", encoding="utf-8")
+        return skill_dir
+
+    def test_skill_at_5_idle_turns_is_unloaded(self):
+        self._make_skill("skill-a")
+        self._make_skill("skill-b")
+        save_idle_state(
+            self.test_dir,
+            {
+                "skill-a": {"idle_turns": 5, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+                "skill-b": {"idle_turns": 4, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+            },
+        )
+        result = auto_unload_idle_skills(self.test_dir, idle_threshold=5)
+
+        self.assertIn("skill-a", result["unloaded"])
+        self.assertNotIn("skill-b", result["unloaded"])
+        self.assertFalse((self.skills_dir / "skill-a" / "SKILL.md").exists())
+        self.assertTrue((self.skills_dir / "skill-b" / "SKILL.md").exists())
+        state = load_idle_state(self.test_dir)
+        self.assertNotIn("skill-a", state)
+        self.assertIn("skill-b", state)
+
+    def test_skill_at_4_idle_turns_is_not_unloaded(self):
+        self._make_skill("skill-a")
+        save_idle_state(
+            self.test_dir,
+            {"skill-a": {"idle_turns": 4, "loaded_at": "t0", "pinned": False, "last_used": "t0"}},
+        )
+        result = auto_unload_idle_skills(self.test_dir, idle_threshold=5)
+
+        self.assertEqual(result["unloaded"], [])
+        self.assertTrue((self.skills_dir / "skill-a" / "SKILL.md").exists())
+        state = load_idle_state(self.test_dir)
+        self.assertIn("skill-a", state)
+
+
+class TestPinnedSkillExemption(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="pinned_test_"))
+        self.skills_dir = self.test_dir / ".agents" / "skills"
+        self.skills_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_pinned_skill_at_high_idle_is_not_unloaded(self):
+        self._make_skill("skill-a")
+        self._make_skill("skill-b")
+        save_idle_state(
+            self.test_dir,
+            {
+                "skill-a": {"idle_turns": 10, "loaded_at": "t0", "pinned": True, "last_used": "t0"},
+                "skill-b": {"idle_turns": 6, "loaded_at": "t0", "pinned": False, "last_used": "t0"},
+            },
+        )
+        result = auto_unload_idle_skills(self.test_dir, idle_threshold=5)
+
+        self.assertEqual(result["unloaded"], ["skill-b"])
+        self.assertNotIn("skill-b", load_idle_state(self.test_dir))
+        state = load_idle_state(self.test_dir)
+        self.assertIn("skill-a", state)
+        self.assertTrue(state["skill-a"]["pinned"])
+
+    def test_cmd_load_marks_pinned_true_in_idle_state(self):
+        # Source skill lives outside .agents/skills/ so cmd_load actually copies it
+        src_dir = self.test_dir / "catalog" / "skill-a"
+        src_dir.mkdir(parents=True)
+        (src_dir / "SKILL.md").write_text("---\nname: skill-a\n---\nBody", encoding="utf-8")
+        search_dirs = [(100, "Project", self.test_dir / "catalog")]
+        exit_code = cmd_load("skill-a", self.test_dir, custom_search_dirs=search_dirs)
+        self.assertEqual(exit_code, 0)
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["skill-a"]["pinned"], True)
+        self.assertEqual(state["skill-a"]["idle_turns"], 0)
+
+    def _make_skill(self, name: str) -> None:
+        skill_dir = self.skills_dir / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\nBody", encoding="utf-8")
+
+
+class TestProfileDormancyReconciliation(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="reconcile_test_"))
+        self.skills_dir = self.test_dir / ".agents" / "skills"
+        self.skills_dir.mkdir(parents=True)
+        (self.test_dir / ".skills-profile").write_text("all", encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_reconcile_dormancy_keeps_profile_skills_active(self):
+        # chisle is core (should be enabled): starts disabled
+        chisle_dir = self.skills_dir / "chisle"
+        chisle_dir.mkdir(parents=True)
+        (chisle_dir / "SKILL.md.disabled").write_text("---\nname: chisle\n---\nBody", encoding="utf-8")
+        # frontend-design is not core (should be disabled): starts active
+        fd_dir = self.skills_dir / "frontend-design"
+        fd_dir.mkdir(parents=True)
+        (fd_dir / "SKILL.md").write_text("---\nname: frontend-design\n---\nBody", encoding="utf-8")
+
+        result = reconcile_dormancy(self.test_dir, "core")
+
+        self.assertTrue(result["enabled"].get("chisle"), "chisle should be enabled")
+        self.assertTrue(result["disabled"].get("frontend-design"), "frontend-design should be disabled")
+        self.assertFalse((self.skills_dir / "frontend-design" / "SKILL.md").exists())
+        self.assertTrue((self.skills_dir / "frontend-design" / "SKILL.md.disabled").exists())
+        self.assertTrue((self.skills_dir / "chisle" / "SKILL.md").exists())
+
+
+class TestRegistryFiveColumnFormat(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="registry_format_test_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_generate_registry_lines_has_five_columns(self):
+        active = {
+            "chisle": SkillRecord(
+                name="chisle",
+                description="Review for bloat.",
+                source_path="./.agents/skills/chisle/SKILL.md",
+                scope="Project",
+                category="6. Meta & Authoring",
+                priority=100,
+                is_disabled=False,
+            ),
+            "frontend-design": SkillRecord(
+                name="frontend-design",
+                description="Design UI layouts.",
+                source_path="./skills/frontend-design/SKILL.md",
+                scope="Project",
+                category="2. Implementation",
+                priority=95,
+                is_disabled=True,
+            ),
+        }
+        lines = generate_registry_lines(self.test_dir, active)
+        header = [l for l in lines if l.startswith("| Skill")][0]
+        self.assertIn("Skill", header)
+        self.assertIn("Category", header)
+        self.assertIn("Scope", header)
+        self.assertIn("Status", header)
+        self.assertIn("Path", header)
+        # Disabled skill marked Disabled status
+        body = "\n".join(lines)
+        self.assertIn("| Disabled |", body)
+        # Chisle path column present
+        self.assertIn("./.agents/skills/chisle/SKILL.md", body)
+
+
+class TestSessionStartReceiptCounts(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="session_receipt_test_"))
+        (self.test_dir / "skill-registry").mkdir(parents=True)
+        (self.test_dir / ".agents" / "skills").mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_receipt_includes_active_dormant_on_demand_counts(self):
+        from io import StringIO
+        import contextlib
+
+        buf = StringIO()
+        with contextlib.redirect_stdout(buf):
+            cmd_session_start(self.test_dir)
+        output = buf.getvalue()
+        self.assertIn("Active:", output)
+        self.assertIn("Dormant:", output)
+        self.assertIn("On-Demand:", output)
+
+
+class TestSkillsRegistryLifecycleIntegration(unittest.TestCase):
+    """End-to-end lifecycle: init dormant-by-default, route auto-loads, idle unloads, pin exempts."""
+
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp(prefix="lifecycle_integration_"))
+        (self.test_dir / "skill-registry").mkdir(parents=True)
+        (self.test_dir / ".agents" / "skills").mkdir(parents=True)
+        (self.test_dir / ".skills-profile").write_text("core", encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _make_skill(self, name: str, category: str = "2. Implementation") -> None:
+        skill_dir = self.test_dir / ".agents" / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Test {name}.\n---\nBody", encoding="utf-8"
+        )
+
+    def _route_skill(self, name: str, query: str) -> None:
+        # Use slash command to guarantee a route decision for a known skill
+        cmd_route(f"/{name} {query}", self.test_dir)
+
+    def test_full_lifecycle_route_loads_and_unloads_after_idle_turns(self):
+        self._make_skill("chisle")
+        self._make_skill("frontend-design")
+
+        # Turn 1: route chisle -> auto-loads, idle_turns=0
+        self._route_skill("chisle", "review this diff")
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["chisle"]["idle_turns"], 0)
+        self.assertTrue((self.test_dir / ".agents" / "skills" / "chisle" / "SKILL.md").exists())
+
+        # Turn 2: route chisle again -> stays loaded (counter reset)
+        self._route_skill("chisle", "review again")
+        state = load_idle_state(self.test_dir)
+        self.assertEqual(state["chisle"]["idle_turns"], 0)
+
+        # Turns 3-6: route no_route queries -> chisle idle counter climbs to 4, then 5 -> unload
+        for _ in range(4):
+            cmd_route("unrelated task that matches nothing", self.test_dir)
+        state = load_idle_state(self.test_dir)
+        # After 4 idle turns, still present
+        self.assertIn("chisle", state)
+        self.assertEqual(state["chisle"]["idle_turns"], 4)
+        self.assertTrue((self.test_dir / ".agents" / "skills" / "chisle" / "SKILL.md").exists())
+
+        cmd_route("another unrelated query", self.test_dir)
+        state = load_idle_state(self.test_dir)
+        # At 5 idle turns, auto-unloaded
+        self.assertNotIn("chisle", state)
+        self.assertTrue((self.test_dir / ".agents" / "skills" / "chisle" / "SKILL.md.disabled").exists())
+
+    def test_pinned_skill_exempt_from_auto_unload(self):
+        # Source skill lives outside .agents/skills/ so cmd_load actually copies it
+        src_dir = self.test_dir / "catalog" / "chisle"
+        src_dir.mkdir(parents=True)
+        (src_dir / "SKILL.md").write_text("---\nname: chisle\n---\nBody", encoding="utf-8")
+        search_dirs = [(100, "Project", self.test_dir / "catalog")]
+        exit_code = cmd_load("chisle", self.test_dir, custom_search_dirs=search_dirs)
+        self.assertEqual(exit_code, 0)
+        state = load_idle_state(self.test_dir)
+        self.assertTrue(state["chisle"]["pinned"])
+
+        # Drive idle counter high via unrelated queries
+        for _ in range(6):
+            cmd_route("unrelated task", self.test_dir)
+        state = load_idle_state(self.test_dir)
+        # Pinned skill remains loaded despite high idle counter
+        self.assertEqual(state["chisle"]["pinned"], True)
+        self.assertTrue((self.test_dir / ".agents" / "skills" / "chisle" / "SKILL.md").exists())
 
 
 if __name__ == "__main__":
