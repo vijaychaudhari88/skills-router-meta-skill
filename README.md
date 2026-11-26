@@ -238,6 +238,13 @@ skills-router-meta-skill/
 ├── .gitignore
 ├── LICENSE                          # MIT License
 ├── README.md                        # Documentation & Architecture Guide
+├── antigem-plugins.json             # AntiGem plugin repository index
+├── skills-router-plugin/            # AntiGem custom plugin (manifest + worker + skills)
+│   ├── manifest.json                # manifest v3, id skills-router, v1.0.0
+│   ├── worker.js                    # MCP tools: list_skills, read_skill, route, dormancy_check
+│   ├── icon.svg                     # Plugin icon
+│   └── skills/                      # Skill guides: skills-manager, route, route_skills, sync, lifecycle, init
+├── skills-router-plugin.zip         # Installable ZIP bundle
 ├── skills/
 │   └── skills-manager/
 │       └── SKILL.md                 # The Canonical Meta-Skill Specification
